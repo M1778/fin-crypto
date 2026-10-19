@@ -1,0 +1,56 @@
+// fin-crypto test suite.
+//
+// Run: finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto
+// (from the repo root). Vectors: FIPS 180-4 (SHA-256), RFC 4231 (HMAC).
+
+import { sha256_hex, sha256_bytes_hex, hmac_sha256_hex, hmac_sha256_bytes_hex, random_bytes, random_hex, const_time_eq, const_time_eq_bytes } from crypto::fin;
+import { assert_true } from testing::std;
+import { equals, len } from strings::std;
+import { to_chars } from strings::std;
+
+fun main() <noret> {
+    // --- SHA-256, FIPS 180-4 vectors ---
+    assert_true(equals(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), "sha256('') != FIPS vector");
+    assert_true(equals(sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256('abc') != FIPS vector");
+    assert_true(equals(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"), "sha256(448-bit) != FIPS vector");
+
+    // --- SHA-256 over byte arrays ---
+    let abc <[char]> = to_chars("abc");
+    assert_true(equals(sha256_bytes_hex(abc, 3), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256_bytes_hex('abc') mismatch");
+    delete abc;
+
+    // --- HMAC-SHA256, RFC 4231 test case 2 ---
+    // key = "Jefe", data = "what do ya want for nothing?"
+    assert_true(equals(hmac_sha256_hex("Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac-sha256 != RFC 4231 TC2");
+    assert_true(equals(hmac_sha256_hex("key", "The quick brown fox jumps over the lazy dog"), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"), "hmac-sha256 fox vector mismatch");
+
+    // --- HMAC over byte arrays (same answers, bytes API) ---
+    let k <[char]> = to_chars("Jefe");
+    let m <[char]> = to_chars("what do ya want for nothing?");
+    assert_true(equals(hmac_sha256_bytes_hex(k, 4, m, 28), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac bytes API mismatch");
+    delete k;
+    delete m;
+
+    // --- constant-time comparison ---
+    assert_true(const_time_eq("abc", "abc"), "const_time_eq equal strings");
+    assert_true(!const_time_eq("abc", "abd"), "const_time_eq differing strings");
+    assert_true(!const_time_eq("abc", "abcd"), "const_time_eq different lengths");
+    assert_true(const_time_eq("", ""), "const_time_eq empty strings");
+    let x <[char]> = to_chars("same");
+    let y <[char]> = to_chars("same");
+    let z <[char]> = to_chars("sane");
+    assert_true(const_time_eq_bytes(x, y, 4), "const_time_eq_bytes equal");
+    assert_true(!const_time_eq_bytes(x, z, 4), "const_time_eq_bytes differ");
+    delete x;
+    delete y;
+    delete z;
+
+    // --- secure random: shape checks (values are nondeterministic) ---
+    let r <[char]> = random_bytes(16);
+    assert_true(r.length == 17, "random_bytes(16) length");
+    delete r;
+    let rh <string> = random_hex(16);
+    assert_true(len(rh) == 32, "random_hex(16) is 32 hex chars");
+
+    printf("all fin-crypto tests passed\n");
+}

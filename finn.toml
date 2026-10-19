@@ -1,0 +1,11 @@
+[project]
+name = "fin-crypto"
+version = "0.1.0"
+envpath = ".finn"
+entrypoint = "crypto.fin"
+
+[packages]
+
+[scripts]
+check = "finc src/crypto.fin"
+test = "finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto"
