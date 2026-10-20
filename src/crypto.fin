@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// SHA-256/HMAC-SHA256 in pure Fin; Linux OS randomness via /dev/urandom.
+// SHA-256/HMAC-SHA256 in pure Fin; OS randomness via UCRT rand_s on Windows,
+// /dev/urandom on Linux/macOS. Native Windows/macOS execution is CI-pending.
 // Native 32-bit operations validated with finc 0.4.0 at O0/O2. Functional
 // vectors and assembly inspection are not a cryptographic or timing audit.
 
@@ -9,12 +10,20 @@ import { to_chars, from_chars } from strings::std;
 
 namespace fin {
 
+#c_ifdef FIN_TARGET_WINDOWS
+// UCRT errno_t rand_s(unsigned int*): int status, pointer to 32-bit uint.
+// No srand seed and no extra import library; the C header's _CRT_RAND_S
+// declaration gate is unnecessary for this direct foreign declaration.
+#[llvm_name="rand_s"]
+@define crypto_rand_s(value: &uint) <int>;
+#c_else
 #[llvm_name="fopen"]
 @define crypto_fopen(path: string, mode: string) <&char>;
 #[llvm_name="fread"]
 @define crypto_fread(ptr: &char, size: ulong, nmemb: ulong, stream: &char) <ulong>;
 #[llvm_name="fclose"]
 @define crypto_fclose(stream: &char) <int>;
+#c_endif
 #[llvm_name="strlen"]
 @define crypto_strlen(text: string) <ulong>;
 
@@ -225,18 +234,34 @@ pub fun hmac_sha256_bytes_hex(key: [char], key_len: int, message: [char], msg_le
 }
 
 // Preserve the historical count + 1 array length and trailing zero sentinel.
-// Linux-only; OS open/read failures abort rather than returning weak randomness.
+// OS failures abort rather than returning weak or partially filled randomness.
 #[export]
 pub fun random_bytes(count: int) <[char]> {
     blame count >= 0 && count <= 2147483646, "random_bytes: count outside allocation range";
     let buf <[char]> = new [char, count + 1]{};
     buf[count] = cast<char>(0);
     if (count > 0) {
+#c_ifdef FIN_TARGET_WINDOWS
+        let off <int> = 0;
+        while (off < count) {
+            let word <uint> = cast<uint>(0);
+            let status <int> = crypto_rand_s(&word);
+            blame status == 0, "random_bytes: Windows rand_s failed";
+            let take <int> = count - off;
+            if (take > 4) { take = 4; }
+            for (let i <int> = 0; i < take; i++) {
+                buf[off + i] = cast<char>(cast<int>(word % cast<uint>(256)));
+                word = word >> cast<uint>(8);
+            }
+            off += take;
+        }
+#c_else
         let f <&char> = crypto_fopen("/dev/urandom", "rb");
-        blame f != null, "random_bytes: cannot open /dev/urandom (Linux-only)";
+        blame f != null, "random_bytes: cannot open /dev/urandom";
         let got <ulong> = crypto_fread(&buf[0], cast<ulong>(1), cast<ulong>(count), f);
         crypto_fclose(f);
         blame got == cast<ulong>(count), "random_bytes: short read from /dev/urandom";
+#c_endif
     }
     return buf;
 }

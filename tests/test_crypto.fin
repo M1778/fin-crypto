@@ -51,7 +51,14 @@ fun main() <noret> {
     delete y;
     delete z;
 
-    // --- secure random: shape checks (values are nondeterministic) ---
+    // --- OS random: platform-independent shape checks, not entropy tests ---
+    // No /dev/urandom assumption: Windows uses rand_s. Counts straddling its
+    // four-byte word boundaries exercise partial-word output and the sentinel.
+    for (let count <int> = 1; count <= 9; count++) {
+        let short_random <[char]> = random_bytes(count);
+        assert_true(short_random.length == count + 1 && short_random[count] == cast<char>(0), "random partial-word sentinel");
+        delete short_random;
+    }
     let r <[char]> = random_bytes(16);
     assert_true(r.length == 17 && r[16] == cast<char>(0), "random_bytes(16) sentinel and length");
     delete r;

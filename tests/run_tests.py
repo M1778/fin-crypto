@@ -5,7 +5,10 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
-import resource
+try:
+    import resource
+except ImportError:  # Unavailable on native Windows.
+    resource = None
 import signal
 import subprocess
 import tempfile
@@ -16,7 +19,8 @@ DEFAULT_TOOLCHAIN = ROOT.parent / ".toolchain"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    local_finc = DEFAULT_TOOLCHAIN / "bin/finc"
+    suffix = ".exe" if os.name == "nt" else ""
+    local_finc = DEFAULT_TOOLCHAIN / f"bin/finc{suffix}"
     local_libs = DEFAULT_TOOLCHAIN / "lib/std"
     parser.add_argument("--finc", default=os.environ.get("FINC") or
                         (str(local_finc) if local_finc.is_file() else "finc"))
@@ -24,13 +28,14 @@ def main():
                         (str(local_libs) if local_libs.is_dir() else None))
     args = parser.parse_args()
     libs_flags = ["--fin-libs", args.fin_libs] if args.fin_libs is not None else []
-    # Expected blame aborts must not leave core dumps behind.
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    # Expected blame aborts must not leave POSIX core dumps behind.
+    if resource is not None:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     with tempfile.TemporaryDirectory(prefix="crypto-tests-") as folder:
         for opt in ("O0", "O2"):
             binaries = {}
             for name in ("test_crypto", "test_native_bits", "test_differential", "test_invalid"):
-                binary = Path(folder) / f"{name}_{opt}"
+                binary = Path(folder) / f"{name}_{opt}{suffix}"
                 subprocess.run([args.finc, str(ROOT / "tests" / f"{name}.fin"),
                                 "-I", str(ROOT / "src"), *libs_flags,
                                 f"-{opt}", "-o", str(binary)], check=True, timeout=120)
@@ -60,7 +65,11 @@ def main():
                                      text=True, timeout=5,
                                      env={**invalid_env, "CRYPTO_INVALID": str(case)})
                 output = run.stdout + run.stderr
-                assert run.returncode == -signal.SIGABRT, (opt, case, run.returncode, output)
+                # Windows CRT abort statuses are not POSIX negative signals.
+                assert run.returncode != 0, (opt, case, run.returncode, output)
+                if os.name != "nt":
+                    assert run.returncode == -signal.SIGABRT, (opt, case, run.returncode, output)
+                assert "assertion failed:" in output, (opt, case, output)
                 assert ("outside" in output or "null string" in output), (opt, case, output)
                 assert "ERROR: invalid input returned" not in output
             print(f"{opt}: vectors/native semantics, {len(cases)} differential cases, "

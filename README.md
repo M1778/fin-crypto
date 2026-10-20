@@ -11,6 +11,12 @@ These are correctness checks, **not a cryptographic audit or proof of constant-t
 execution**. The current changes are unreleased source, not a published version.
 The earlier first execution caught a SHA-256 schedule bug (see CHANGELOG).
 
+Native platform support is **CI-pending**, not cross-platform verified: Linux
+uses `/dev/urandom` (locally tested); macOS uses `/dev/urandom`; Windows uses
+UCRT `rand_s`. Native Windows/macOS compile-and-run validation is still required.
+The Windows branch requires a finc toolchain defining `FIN_TARGET_WINDOWS` and
+linking the UCRT, without an extra crypto library or manual linker flags.
+
 ## Install
 
 With [finn](https://github.com/M1778/finn) (once the registry resolves bare names):
@@ -88,7 +94,7 @@ NULs require a byte API). Auth consumers adopting raw HMAC must account for the
 
 - **Fin standard library**: `strings::std` (`to_chars`/`from_chars`); native int bitwise expressions and uint shifts/addition implement the compression and comparison paths.
 - **Base64/hex**: use `base64_encode`/`hex_encode` from `encoding::std` when needed.
-- **libc**: `strlen` for string-size checks; `fopen`/`fread`/`fclose` for `/dev/urandom` (Linux-only).
+- **libc/UCRT**: `strlen` for string-size checks; `fopen`/`fread`/`fclose` for `/dev/urandom` on Linux/macOS; Windows [`rand_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/rand-s?view=msvc-170), documented to use OS cryptographically secure randomness. Its ABI is `errno_t rand_s(unsigned int*)`, mapped to Fin `int` and `&uint`.
 - No Fin package dependencies (`finn.toml` `[packages]` is empty).
 
 ## Security and implementation limits
@@ -105,10 +111,13 @@ NULs require a byte API). Auth consumers adopting raw HMAC must account for the
 - No guaranteed secret zeroization is provided. `delete`/`free_str` release
   memory without a guaranteed secure erase. Untrusted array handles/pointers
   cannot be validated beyond their declared length; Fin has no borrow checker.
-- `random_bytes` uses only `/dev/urandom`, preserves its trailing zero sentinel,
-  and aborts on open failure or short read. It has no weak fallback, recoverable
-  errors, cross-platform backend, or early-boot entropy-readiness guarantee.
-  Shape tests do not establish entropy quality.
+- `random_bytes` preserves its trailing zero sentinel on every platform. Linux/
+  macOS abort on `/dev/urandom` open failure or short read; Windows aborts on any
+  nonzero `rand_s` status, and copies up to four bytes per successful OS-backed
+  call (never `rand`/`srand`). There is no weak fallback or recoverable error API,
+  and no early-boot entropy-readiness guarantee for the `/dev/urandom` path.
+  Shape tests do not establish entropy quality. Native Windows/macOS CI remains
+  pending; Linux runs do not execute or verify those native branches.
 - SHA-256 alone is **not** suitable for password storage; use an appropriate,
   reviewed password KDF. Validate untrusted lengths before calling these APIs:
   `blame` aborts the process and cannot be caught.
@@ -122,9 +131,12 @@ python3 -I tests/run_tests.py
 Both runners accept `--finc` / `--fin-libs`, then respect `FINC` / `FIN_LIBS`.
 Otherwise they autodetect `../.toolchain/bin/finc` / `../.toolchain/lib/std` when
 available, falling back to `finc` on PATH and its bundled standard library.
-The test runner builds/runs at O0 and O2 in temporary
-folders, disables core dumps, and requires explicit assertion aborts rather than
-segmentation faults for invalid inputs. Coverage includes FIPS empty/abc/448-bit
+The test runner builds/runs at O0 and O2 in temporary folders, uses `.exe` output
+names on Windows, and disables core dumps when POSIX `resource` is available.
+Invalid inputs must print the expected assertion diagnostic and exit nonzero;
+POSIX additionally requires SIGABRT, while Windows CRT exit codes are not treated
+as POSIX signals. RNG checks require only the platform-independent size/sentinel
+contract, including partial four-byte words. Coverage includes FIPS empty/abc/448-bit
 and million-'a' SHA vectors, RFC 4231 cases 1/2/3/4/6/7, raw/hex agreement against
 Python `hashlib`/`hmac`, padding boundaries, binary inputs, keys crossing 64 bytes,
 input preservation, all-byte/mismatch-position equality, and random sentinels.
@@ -160,8 +172,8 @@ flags, revision and checksum for reproduction.
 ## Roadmap
 
 - `v0.2.0`: SHA-512 (via `uint`-pair 64-bit words), SHA-1 (needed by
-  `fin-websocket`'s RFC 6455 handshake), `/dev/urandom` fallback for
-  macOS (`getentropy`) and Windows (`BCryptGenRandom`).
+  `fin-websocket`'s RFC 6455 handshake); evaluate direct platform RNG APIs
+  (`getentropy`/`BCryptGenRandom`) if justified by linking and portability needs.
 - License review: Fin itself is GPL-3.0 and `finn` is GPL-3.0-only; this repo
   ships MIT pending Eleanor's decision on ecosystem licensing.
 
