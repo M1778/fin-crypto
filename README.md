@@ -11,11 +11,20 @@ These are correctness checks, **not a cryptographic audit or proof of constant-t
 execution**. The current changes are unreleased source, not a published version.
 The earlier first execution caught a SHA-256 schedule bug (see CHANGELOG).
 
-Native platform support is **CI-pending**, not cross-platform verified: Linux
-uses `/dev/urandom` (locally tested); macOS uses `/dev/urandom`; Windows uses
-UCRT `rand_s`. Native Windows/macOS compile-and-run validation is still required.
-The Windows branch requires a finc toolchain defining `FIN_TARGET_WINDOWS` and
-linking the UCRT, without an extra crypto library or manual linker flags.
+[Native matrix run 39506702650](https://github.com/M1778/fin-sdk/actions/runs/39506702650)
+passed fin-crypto's Linux x86-64/ARM64 and macOS x86-64/ARM64 builds/tests using
+`/dev/urandom`, at crypto revision `777990f2ef19ec7be6a69a628957ffb48da11974`.
+These are the per-project results, not the overall ecosystem job status.
+**Windows x86-64/ARM64 are blocked by the published compiler**, not merely
+awaiting CI: Fin revision `1f7afd97ab5ad520b78db3140d4f930aaeb74d1b` does not
+predefine `FIN_TARGET_WINDOWS` (nor the Darwin/Linux target macros). Consequently
+`#c_ifdef FIN_TARGET_WINDOWS` selects the non-Windows `/dev/urandom` path even in
+a native Windows build, and the random-source test fails there.
+
+The Windows `rand_s` implementation exists in source but has not passed native
+execution. It requires upstream compiler target-macro support and a successful
+native CI rerun; renaming the guard is not a supported workaround. UCRT linkage
+is intended to need no additional crypto import library or manual linker flags.
 
 ## Install
 
@@ -111,13 +120,15 @@ NULs require a byte API). Auth consumers adopting raw HMAC must account for the
 - No guaranteed secret zeroization is provided. `delete`/`free_str` release
   memory without a guaranteed secure erase. Untrusted array handles/pointers
   cannot be validated beyond their declared length; Fin has no borrow checker.
-- `random_bytes` preserves its trailing zero sentinel on every platform. Linux/
-  macOS abort on `/dev/urandom` open failure or short read; Windows aborts on any
-  nonzero `rand_s` status, and copies up to four bytes per successful OS-backed
-  call (never `rand`/`srand`). There is no weak fallback or recoverable error API,
-  and no early-boot entropy-readiness guarantee for the `/dev/urandom` path.
-  Shape tests do not establish entropy quality. Native Windows/macOS CI remains
-  pending; Linux runs do not execute or verify those native branches.
+- `random_bytes` preserves its trailing zero sentinel. Linux/macOS abort on
+  `/dev/urandom` open failure or short read. The intended Windows branch aborts
+  on any nonzero `rand_s` status and copies up to four bytes per successful
+  OS-backed call (never `rand`/`srand`), but published compiler `1f7afd97` does
+  not select this branch: native Windows tests fail trying `/dev/urandom`.
+  There is no weak fallback or recoverable error API, and no early-boot
+  entropy-readiness guarantee for the `/dev/urandom` path. Native Linux/macOS
+  checks passed as recorded above; their results do not validate Windows.
+  Shape tests do not establish entropy quality.
 - SHA-256 alone is **not** suitable for password storage; use an appropriate,
   reviewed password KDF. Validate untrusted lengths before calling these APIs:
   `blame` aborts the process and cannot be caught.
