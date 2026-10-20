@@ -92,9 +92,12 @@ priv fun compress(h: [uint], block: [char], k: [uint]) <noret> {
         w[i] = load32_be(block, i * 4);
     }
     for (let i <int> = 0; i < 48; i++) {
-        let s0 <uint> = bit_xor(bit_xor(rotate_right(w[i], cast<uint>(7)), rotate_right(w[i], cast<uint>(18))), w[i] >> cast<uint>(3));
-        let s1 <uint> = bit_xor(bit_xor(rotate_right(w[i + 7], cast<uint>(17)), rotate_right(w[i + 7], cast<uint>(19))), w[i + 7] >> cast<uint>(10));
-        w[i + 16] = add32(add32(w[i], s0), add32(w[i + 7], s1));
+        // FIPS 180-4: w[t] = s1(w[t-2]) + w[t-7] + s0(w[t-15]) + w[t-16];
+        // here t = i+16, so s0 is over w[i+1], s1 over w[i+14], and the
+        // middle term is w[i+9] (t-7), not w[i+7].
+        let s0 <uint> = bit_xor(bit_xor(rotate_right(w[i + 1], cast<uint>(7)), rotate_right(w[i + 1], cast<uint>(18))), w[i + 1] >> cast<uint>(3));
+        let s1 <uint> = bit_xor(bit_xor(rotate_right(w[i + 14], cast<uint>(17)), rotate_right(w[i + 14], cast<uint>(19))), w[i + 14] >> cast<uint>(10));
+        w[i + 16] = add32(add32(w[i], s0), add32(w[i + 9], s1));
     }
     let a <uint> = h[0];
     let b <uint> = h[1];

@@ -4,10 +4,11 @@ Cryptographic primitives for [Fin](https://github.com/M1778/Fin): SHA-256, HMAC-
 
 ## Verification status
 
-> **UNVERIFIED.** This library is written against `docs/agent-guide.md` (Fin v0.4.0)
-> but no `finc` binary was available when it was written, so it has not been
-> type-checked or executed yet. Do not use for real secrets until the test suite
-> below passes on a real toolchain. See [test vectors](#testing).
+**VERIFIED 2026-10-20** — built and executed with finc 0.4.0 (contract 3).
+`tests/test_crypto.fin` passes: FIPS 180-4 SHA-256 vectors, RFC 4231
+HMAC-SHA256 vectors, constant-time comparison, CSPRNG shape checks.
+(This run caught and fixed a REAL bug: the SHA-256 message schedule used
+wrong tap indices — see CHANGELOG.)
 
 ## Install
 

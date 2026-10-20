@@ -1,5 +1,15 @@
 # Changelog — fin-crypto
 
+## [0.1.1] — 2026-10-20
+### Fixed
+- REAL bug, caught by first execution (finc 0.4.0): the SHA-256 message
+  schedule used wrong tap indices (`s0` over `w[i]`, `s1` over `w[i+7]`,
+  middle term `w[i+7]`). Correct per FIPS 180-4: `s0` over `w[i+1]`,
+  `s1` over `w[i+14]`, middle term `w[i+9]`. Day-1's vectors were
+  code-review-only; they now pass at runtime (FIPS 180-4 + RFC 4231).
+
+## [0.1.0] — 2026-10-19
+
 All notable changes to this library. Format follows [Keep a Changelog](https://keepachangelog.com/),
 versioning follows [SemVer](https://semver.org/).
 
