@@ -1,0 +1,15 @@
+// Runtime operands prevent these bit-pattern checks being only constant folding.
+@define atoi(text: string) <int>;
+@define getenv(name: string) <string>;
+fun main() <noret> {
+    let high <uint> = cast<uint>(atoi(getenv("CRYPTO_HIGH")));
+    let low <uint> = cast<uint>(2147483647);
+    blame cast<int>(high) < 0;
+    blame cast<uint>(cast<int>(high) ^ cast<int>(low)) == cast<uint>(4294967295);
+    blame cast<uint>(cast<int>(high) | cast<int>(low)) == cast<uint>(4294967295);
+    blame cast<uint>(cast<int>(high) & cast<int>(low)) == cast<uint>(0);
+    blame high >> cast<uint>(31) == cast<uint>(1);
+    blame (high + high) == cast<uint>(0);
+    blame cast<uint>(4294967295) + cast<uint>(1) == cast<uint>(0);
+    printf("native bit patterns and uint wrapping passed\n");
+}

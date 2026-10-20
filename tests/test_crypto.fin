@@ -3,31 +3,37 @@
 // Run: finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto
 // (from the repo root). Vectors: FIPS 180-4 (SHA-256), RFC 4231 (HMAC).
 
-import { sha256_hex, sha256_bytes_hex, hmac_sha256_hex, hmac_sha256_bytes_hex, random_bytes, random_hex, const_time_eq, const_time_eq_bytes } from crypto::fin;
+import { sha256_hex, sha256_bytes, sha256_bytes_hex, hmac_sha256_hex, hmac_sha256_bytes, hmac_sha256_bytes_hex, random_bytes, random_hex, const_time_eq, const_time_eq_bytes } from crypto::fin;
 import { assert_true } from testing::std;
-import { equals, len } from strings::std;
+import { equals, len, free_str } from strings::std;
 import { to_chars } from strings::std;
+
+fun expect_hex(actual: string, expected: string) <bool> {
+    let equal <bool> = equals(actual, expected);
+    free_str(actual);
+    return equal;
+}
 
 fun main() <noret> {
     // --- SHA-256, FIPS 180-4 vectors ---
-    assert_true(equals(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), "sha256('') != FIPS vector");
-    assert_true(equals(sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256('abc') != FIPS vector");
-    assert_true(equals(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"), "sha256(448-bit) != FIPS vector");
+    assert_true(expect_hex(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), "sha256('') != FIPS vector");
+    assert_true(expect_hex(sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256('abc') != FIPS vector");
+    assert_true(expect_hex(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"), "sha256(448-bit) != FIPS vector");
 
     // --- SHA-256 over byte arrays ---
     let abc <[char]> = to_chars("abc");
-    assert_true(equals(sha256_bytes_hex(abc, 3), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256_bytes_hex('abc') mismatch");
+    assert_true(expect_hex(sha256_bytes_hex(abc, 3), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256_bytes_hex('abc') mismatch");
     delete abc;
 
     // --- HMAC-SHA256, RFC 4231 test case 2 ---
     // key = "Jefe", data = "what do ya want for nothing?"
-    assert_true(equals(hmac_sha256_hex("Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac-sha256 != RFC 4231 TC2");
-    assert_true(equals(hmac_sha256_hex("key", "The quick brown fox jumps over the lazy dog"), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"), "hmac-sha256 fox vector mismatch");
+    assert_true(expect_hex(hmac_sha256_hex("Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac-sha256 != RFC 4231 TC2");
+    assert_true(expect_hex(hmac_sha256_hex("key", "The quick brown fox jumps over the lazy dog"), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"), "hmac-sha256 fox vector mismatch");
 
     // --- HMAC over byte arrays (same answers, bytes API) ---
     let k <[char]> = to_chars("Jefe");
     let m <[char]> = to_chars("what do ya want for nothing?");
-    assert_true(equals(hmac_sha256_bytes_hex(k, 4, m, 28), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac bytes API mismatch");
+    assert_true(expect_hex(hmac_sha256_bytes_hex(k, 4, m, 28), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac bytes API mismatch");
     delete k;
     delete m;
 
@@ -47,10 +53,67 @@ fun main() <noret> {
 
     // --- secure random: shape checks (values are nondeterministic) ---
     let r <[char]> = random_bytes(16);
-    assert_true(r.length == 17, "random_bytes(16) length");
+    assert_true(r.length == 17 && r[16] == cast<char>(0), "random_bytes(16) sentinel and length");
     delete r;
     let rh <string> = random_hex(16);
     assert_true(len(rh) == 32, "random_hex(16) is 32 hex chars");
 
+    free_str(rh);
+    let empty_random <[char]> = random_bytes(0);
+    assert_true(empty_random.length == 1 && empty_random[0] == cast<char>(0), "empty random sentinel");
+    delete empty_random;
+    let empty_hex <string> = random_hex(0);
+    assert_true(expect_hex(empty_hex, ""), "empty random hex");
+
+    // RFC 4231 cases 1, 3, 4, 6, 7 exercise binary and long keys.
+    let rk <[char]> = new [char, 131]{};
+    let rm <[char]> = new [char, 50]{};
+    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(11); }
+    let hi <[char]> = to_chars("Hi There");
+    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 20, hi, 8), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"), "RFC4231 case 1");
+    delete hi;
+    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(170); }
+    for (let i <int> = 0; i < 50; i++) { rm[i] = cast<char>(221); }
+    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 20, rm, 50), "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"), "RFC4231 case 3");
+    for (let i <int> = 0; i < 25; i++) { rk[i] = cast<char>(i + 1); }
+    for (let i <int> = 0; i < 50; i++) { rm[i] = cast<char>(205); }
+    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 25, rm, 50), "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b"), "RFC4231 case 4");
+    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(170); }
+    let long_msg <[char]> = to_chars("Test Using Larger Than Block-Size Key - Hash Key First");
+    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 131, long_msg, long_msg.length - 1), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"), "RFC4231 case 6");
+    delete long_msg;
+    let longer_msg <[char]> = to_chars("This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.");
+    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 131, longer_msg, longer_msg.length - 1), "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"), "RFC4231 case 7");
+    delete longer_msg;
+    delete rk;
+    delete rm;
+
+    // Actual empty arrays, owned 32-byte output, repeatability, and no aliasing.
+    let empty <[char]> = new [char, 0]{};
+    let digest <[char]> = sha256_bytes(empty, 0);
+    let again <[char]> = sha256_bytes(empty, 0);
+    let mac <[char]> = hmac_sha256_bytes(empty, 0, empty, 0);
+    assert_true(digest.length == 32 && mac.length == 32, "raw output length");
+    assert_true(const_time_eq_bytes(digest, again, 32), "raw repeated digest");
+    digest[0] = cast<char>(0);
+    assert_true(!const_time_eq_bytes(digest, again, 32), "raw outputs do not alias");
+    assert_true(const_time_eq_bytes(empty, empty, 0), "empty byte comparison");
+    delete digest;
+    delete again;
+    delete mac;
+    delete empty;
+
+    let all <[char]> = new [char, 256]{};
+    let copy <[char]> = new [char, 256]{};
+    for (let i <int> = 0; i < 256; i++) { all[i] = cast<char>(i); copy[i] = cast<char>(i); }
+    assert_true(const_time_eq_bytes(all, copy, 256), "all byte values compare equal");
+    for (let i <int> = 0; i < 256; i++) {
+        copy[i] = cast<char>((i + 1) % 256);
+        assert_true(!const_time_eq_bytes(all, copy, 256), "mismatch at each position");
+        assert_true(const_time_eq_bytes(all, copy, i), "prefix excludes mismatch");
+        copy[i] = all[i];
+    }
+    delete all;
+    delete copy;
     printf("all fin-crypto tests passed\n");
 }

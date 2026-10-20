@@ -1,8 +1,9 @@
-// fin-crypto example: hash a password, MAC a message, mint a token.
+// fin-crypto example: hash a message, authenticate it, and mint a token.
 //
 // Run: finc examples/basic.fin -I src -o basic && ./basic
 
 import { sha256_hex, hmac_sha256_hex, random_hex, const_time_eq } from crypto::fin;
+import { free_str } from strings::std;
 
 fun main() <noret> {
     // 1. Hash something.
@@ -13,7 +14,7 @@ fun main() <noret> {
     let mac <string> = hmac_sha256_hex("s3cr3t", "transfer $100 to eleanor");
     printf("hmac = %s\n", mac);
 
-    // 3. Verify it again (constant-time compare).
+    // 3. Verify it again (full-scan comparison; not a timing proof).
     let check <string> = hmac_sha256_hex("s3cr3t", "transfer $100 to eleanor");
     if (const_time_eq(mac, check)) {
         printf("MAC verified\n");
@@ -24,4 +25,8 @@ fun main() <noret> {
     // 4. Mint a random session token.
     let token <string> = random_hex(32);
     printf("token = %s\n", token);
+    free_str(digest);
+    free_str(mac);
+    free_str(check);
+    free_str(token);
 }

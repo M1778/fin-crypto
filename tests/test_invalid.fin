@@ -1,0 +1,39 @@
+// Each invalid case runs in its own process: blame aborts, it is not catchable.
+import { sha256_bytes, sha256_bytes_hex, hmac_sha256_bytes, hmac_sha256_bytes_hex, const_time_eq_bytes, random_bytes, random_hex, sha256_hex, hmac_sha256_hex, const_time_eq } from crypto::fin;
+@define atoi(text: string) <int>;
+@define getenv(name: string) <string>;
+fun main() <noret> {
+    let which <int> = atoi(getenv("CRYPTO_INVALID"));
+    let a <[char]> = new [char, 1]{};
+    let b <[char]> = new [char, 0]{};
+    if (which == 0) { sha256_bytes(a, -1); }
+    if (which == 1) { sha256_bytes(a, 2); }
+    if (which == 2) { sha256_bytes_hex(a, -1); }
+    if (which == 3) { sha256_bytes_hex(a, 2147483647); }
+    if (which == 4) { hmac_sha256_bytes(a, -1, a, 1); }
+    if (which == 5) { hmac_sha256_bytes(a, 2, a, 1); }
+    if (which == 6) { hmac_sha256_bytes(a, 1, a, -1); }
+    if (which == 7) { hmac_sha256_bytes(a, 1, a, 2); }
+    if (which == 8) { hmac_sha256_bytes_hex(a, -1, a, 1); }
+    if (which == 9) { hmac_sha256_bytes_hex(a, 2, a, 1); }
+    if (which == 10) { hmac_sha256_bytes_hex(a, 1, a, -1); }
+    if (which == 11) { hmac_sha256_bytes_hex(a, 1, a, 2147483647); }
+    if (which == 12) { const_time_eq_bytes(a, a, -1); }
+    if (which == 13) { const_time_eq_bytes(b, a, 1); }
+    if (which == 14) { const_time_eq_bytes(a, b, 1); }
+    if (which == 15) { random_bytes(-1); }
+    if (which == 16) { random_bytes(2147483647); }
+    if (which == 17) { random_hex(-1); }
+    if (which == 18) { random_hex(1073741824); }
+    if (which == 19) { random_hex(2147483647); }
+    let missing <string> = getenv("CRYPTO_ABSENT_NULL_TEST");
+    blame missing == null, "test requires absent environment variable";
+    if (which == 20) { sha256_hex(missing); }
+    if (which == 21) { hmac_sha256_hex(missing, ""); }
+    if (which == 22) { hmac_sha256_hex("", missing); }
+    if (which == 23) { const_time_eq(missing, ""); }
+    if (which == 24) { const_time_eq("", missing); }
+    delete a;
+    delete b;
+    printf("ERROR: invalid input returned\n");
+}

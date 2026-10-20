@@ -1,0 +1,27 @@
+// Stable before/after workload: existing hex APIs, owned outputs freed.
+import { sha256_bytes_hex, hmac_sha256_bytes_hex } from crypto::fin;
+import { to_chars, free_str } from strings::std;
+
+fun main() <noret> {
+    let data <[char]> = new [char, 65536]{};
+    for (let i <int> = 0; i < data.length; i++) { data[i] = cast<char>(i % 256); }
+    let key <[char]> = to_chars("benchmark-key");
+    let checksum <int> = 0;
+    for (let i <int> = 0; i < 16; i++) {
+        let digest <string> = sha256_bytes_hex(data, data.length);
+        let chars <[char]> = to_chars(digest);
+        checksum += cast<int>(chars[0]);
+        delete chars;
+        free_str(digest);
+    }
+    for (let i <int> = 0; i < 1000; i++) {
+        let mac <string> = hmac_sha256_bytes_hex(key, 13, data, 32);
+        let chars <[char]> = to_chars(mac);
+        checksum += cast<int>(chars[0]);
+        delete chars;
+        free_str(mac);
+    }
+    delete key;
+    delete data;
+    printf("sha256: 16 x 65536 bytes; hmac: 1000 x 32 bytes; checksum=%d\n", checksum);
+}

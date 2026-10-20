@@ -1,75 +1,63 @@
 // SPDX-License-Identifier: MIT
-// fin-crypto v0.1.0 — cryptographic primitives for Fin.
-//
-// SHA-256 and HMAC-SHA256 are implemented in pure Fin on top of bits::std,
-// because the Fin expression grammar has no & | ^ operators (see
-// lib/std/bits.fin and lib/std/operators.fin). Secure random bytes come from
-// the operating system (/dev/urandom — Linux-only in v0.1.0).
-//
-// STATUS: written against docs/agent-guide.md (Fin v0.4.0). UNVERIFIED — no
-// finc binary was available in this environment, so nothing below has been
-// type-checked or executed yet. See README.md "Verification status".
+// SHA-256/HMAC-SHA256 in pure Fin; Linux OS randomness via /dev/urandom.
+// Native 32-bit operations validated with finc 0.4.0 at O0/O2. Functional
+// vectors and assembly inspection are not a cryptographic or timing audit.
 
 #[stdimport] %{
-import { bit_and, bit_or, bit_xor, bit_not, rotate_right } from bits::std;
 import { to_chars, from_chars } from strings::std;
 }%
 
 namespace fin {
 
-// --- libc bindings (used only by the OS random source) ---
-
 #[llvm_name="fopen"]
 @define crypto_fopen(path: string, mode: string) <&char>;
-
 #[llvm_name="fread"]
 @define crypto_fread(ptr: &char, size: ulong, nmemb: ulong, stream: &char) <ulong>;
-
 #[llvm_name="fclose"]
 @define crypto_fclose(stream: &char) <int>;
+#[llvm_name="strlen"]
+@define crypto_strlen(text: string) <ulong>;
 
-// --- private helpers ---
-
-// Byte value of b[i] as uint (0..255). char may be signed; adjust like
-// lib/std/encoding.fin does.
-priv fun byte_at(b: [char], i: int) <uint> {
-    let v <int> = cast<int>(b[i]);
-    if (v < 0) { v = v + 256; }
-    return cast<uint>(v);
+// Native bitwise expressions lower on int; casts preserve all 32 bits.
+priv fun xor32(a: uint, b: uint) <uint> {
+    return cast<uint>(cast<int>(a) ^ cast<int>(b));
 }
-
-// Addition modulo 2^32 that never relies on overflow wrapping: every
-// intermediate value stays below 2^17 except the final result (< 2^32,
-// exact). Fin's uint is 32 bits; a plain + may or may not wrap.
+priv fun and32(a: uint, b: uint) <uint> {
+    return cast<uint>(cast<int>(a) & cast<int>(b));
+}
+priv fun rotate_right(n: uint, shift: uint) <uint> {
+    // All private call sites use a fixed shift in 1..31; uint >> is logical.
+    return (n >> shift) + (n << (cast<uint>(32) - shift));
+}
 priv fun add32(a: uint, b: uint) <uint> {
-    let a_lo <uint> = a % cast<uint>(65536);
-    let a_hi <uint> = a >> cast<uint>(16);
-    let b_lo <uint> = b % cast<uint>(65536);
-    let b_hi <uint> = b >> cast<uint>(16);
-    let lo_sum <uint> = a_lo + b_lo;
-    let carry <uint> = lo_sum >> cast<uint>(16);
-    let lo <uint> = lo_sum % cast<uint>(65536);
-    let hi <uint> = (a_hi + b_hi + carry) % cast<uint>(65536);
-    return lo + (hi << cast<uint>(16));
+    // finc 0.4.0 emits modular i32 add; test_native_bits pins this assumption.
+    return a + b;
 }
-
-// Load 4 bytes big-endian as uint. Exact: result < 2^32.
+priv fun byte_at(b: [char], i: int) <uint> {
+    return cast<uint>(cast<int>(b[i]) & 255);
+}
+priv fun check_length(data: [char], len: int) <noret> {
+    blame len >= 0 && len <= data.length, "crypto: byte length outside array";
+}
+priv fun string_bytes(s: string) <[char]> {
+    blame s != null, "crypto: null string";
+    // strings::std.to_chars uses signed int length and allocates length + 1.
+    blame crypto_strlen(s) <= cast<ulong>(2147483646), "crypto: string too large";
+    return to_chars(s);
+}
 priv fun load32_be(b: [char], off: int) <uint> {
     return byte_at(b, off) * cast<uint>(16777216)
          + byte_at(b, off + 1) * cast<uint>(65536)
          + byte_at(b, off + 2) * cast<uint>(256)
          + byte_at(b, off + 3);
 }
-
 priv fun hex_digit(v: uint) <char> {
-    if (v < cast<uint>(10)) {
-        return cast<char>(cast<int>('0') + cast<int>(v));
-    }
+    if (v < cast<uint>(10)) { return cast<char>(cast<int>('0') + cast<int>(v)); }
     return cast<char>(cast<int>('a') + cast<int>(v) - 10);
 }
-
-// Lowercase hex of the first len bytes of digest. Caller owns the result.
 priv fun hex_of_bytes(digest: [char], len: int) <string> {
+    check_length(digest, len);
+    blame len <= 1073741823, "crypto: hex output too large";
     let out <[char]> = new [char, len * 2 + 1]{};
     for (let i <int> = 0; i < len; i++) {
         let b <uint> = byte_at(digest, i);
@@ -82,21 +70,12 @@ priv fun hex_of_bytes(digest: [char], len: int) <string> {
     return s;
 }
 
-// --- SHA-256 (FIPS 180-4) ---
-
-// One 64-byte block compression. h holds the 8 running state words and is
-// updated in place (array handles share storage with the caller).
-priv fun compress(h: [uint], block: [char], k: [uint]) <noret> {
-    let w <[uint]> = new [uint, 64]{};
-    for (let i <int> = 0; i < 16; i++) {
-        w[i] = load32_be(block, i * 4);
-    }
+// Reuse the caller's schedule. No allocation or block copying in this loop.
+priv fun compress(h: [uint], data: [char], off: int, k: [uint], w: [uint]) <noret> {
+    for (let i <int> = 0; i < 16; i++) { w[i] = load32_be(data, off + i * 4); }
     for (let i <int> = 0; i < 48; i++) {
-        // FIPS 180-4: w[t] = s1(w[t-2]) + w[t-7] + s0(w[t-15]) + w[t-16];
-        // here t = i+16, so s0 is over w[i+1], s1 over w[i+14], and the
-        // middle term is w[i+9] (t-7), not w[i+7].
-        let s0 <uint> = bit_xor(bit_xor(rotate_right(w[i + 1], cast<uint>(7)), rotate_right(w[i + 1], cast<uint>(18))), w[i + 1] >> cast<uint>(3));
-        let s1 <uint> = bit_xor(bit_xor(rotate_right(w[i + 14], cast<uint>(17)), rotate_right(w[i + 14], cast<uint>(19))), w[i + 14] >> cast<uint>(10));
+        let s0 <uint> = xor32(xor32(rotate_right(w[i + 1], cast<uint>(7)), rotate_right(w[i + 1], cast<uint>(18))), w[i + 1] >> cast<uint>(3));
+        let s1 <uint> = xor32(xor32(rotate_right(w[i + 14], cast<uint>(17)), rotate_right(w[i + 14], cast<uint>(19))), w[i + 14] >> cast<uint>(10));
         w[i + 16] = add32(add32(w[i], s0), add32(w[i + 9], s1));
     }
     let a <uint> = h[0];
@@ -108,11 +87,11 @@ priv fun compress(h: [uint], block: [char], k: [uint]) <noret> {
     let g <uint> = h[6];
     let hh <uint> = h[7];
     for (let i <int> = 0; i < 64; i++) {
-        let s1 <uint> = bit_xor(bit_xor(rotate_right(e, cast<uint>(6)), rotate_right(e, cast<uint>(11))), rotate_right(e, cast<uint>(25)));
-        let ch <uint> = bit_xor(bit_and(e, f), bit_and(bit_not(e), g));
+        let s1 <uint> = xor32(xor32(rotate_right(e, cast<uint>(6)), rotate_right(e, cast<uint>(11))), rotate_right(e, cast<uint>(25)));
+        let ch <uint> = xor32(and32(e, f), and32(xor32(e, cast<uint>(4294967295)), g));
         let t1 <uint> = add32(add32(add32(hh, s1), ch), add32(k[i], w[i]));
-        let s0 <uint> = bit_xor(bit_xor(rotate_right(a, cast<uint>(2)), rotate_right(a, cast<uint>(13))), rotate_right(a, cast<uint>(22)));
-        let maj <uint> = bit_xor(bit_xor(bit_and(a, b), bit_and(a, c)), bit_and(b, c));
+        let s0 <uint> = xor32(xor32(rotate_right(a, cast<uint>(2)), rotate_right(a, cast<uint>(13))), rotate_right(a, cast<uint>(22)));
+        let maj <uint> = xor32(xor32(and32(a, b), and32(a, c)), and32(b, c));
         let t2 <uint> = add32(s0, maj);
         hh = g;
         g = f;
@@ -131,37 +110,36 @@ priv fun compress(h: [uint], block: [char], k: [uint]) <noret> {
     h[5] = add32(h[5], f);
     h[6] = add32(h[6], g);
     h[7] = add32(h[7], hh);
-    delete w;
 }
 
-// Raw 32-byte SHA-256 digest of the first len bytes of data.
-// The caller owns the returned array and must delete it.
 priv fun sha256_raw(data: [char], len: int) <[char]> {
-    // Padding: message || 0x80 || zero bytes || 64-bit big-endian bit length,
-    // total a multiple of 64 bytes.
-    let n <int> = len + 9;
-    let rem <int> = n % 64;
-    let padded_len <int> = n;
-    if (rem != 0) { padded_len = n + (64 - rem); }
-    let msg <[char]> = new [char, padded_len]{};
-    for (let i <int> = 0; i < len; i++) { msg[i] = data[i]; }
-    msg[len] = cast<char>(128);
-    for (let i <int> = len + 1; i < padded_len - 8; i++) { msg[i] = cast<char>(0); }
-    let tmp <ulong> = cast<ulong>(len) * cast<ulong>(8);
-    for (let i <int> = 7; i >= 0; i--) {
-        msg[padded_len - 8 + i] = cast<char>(cast<int>(tmp % cast<ulong>(256)));
-        tmp = tmp / cast<ulong>(256);
-    }
+    check_length(data, len);
     let h <[uint]> = [cast<uint>(1779033703), cast<uint>(3144134277), cast<uint>(1013904242), cast<uint>(2773480762), cast<uint>(1359893119), cast<uint>(2600822924), cast<uint>(528734635), cast<uint>(1541459225)];
     let k <[uint]> = [cast<uint>(1116352408), cast<uint>(1899447441), cast<uint>(3049323471), cast<uint>(3921009573), cast<uint>(961987163), cast<uint>(1508970993), cast<uint>(2453635748), cast<uint>(2870763221), cast<uint>(3624381080), cast<uint>(310598401), cast<uint>(607225278), cast<uint>(1426881987), cast<uint>(1925078388), cast<uint>(2162078206), cast<uint>(2614888103), cast<uint>(3248222580), cast<uint>(3835390401), cast<uint>(4022224774), cast<uint>(264347078), cast<uint>(604807628), cast<uint>(770255983), cast<uint>(1249150122), cast<uint>(1555081692), cast<uint>(1996064986), cast<uint>(2554220882), cast<uint>(2821834349), cast<uint>(2952996808), cast<uint>(3210313671), cast<uint>(3336571891), cast<uint>(3584528711), cast<uint>(113926993), cast<uint>(338241895), cast<uint>(666307205), cast<uint>(773529912), cast<uint>(1294757372), cast<uint>(1396182291), cast<uint>(1695183700), cast<uint>(1986661051), cast<uint>(2177026350), cast<uint>(2456956037), cast<uint>(2730485921), cast<uint>(2820302411), cast<uint>(3259730800), cast<uint>(3345764771), cast<uint>(3516065817), cast<uint>(3600352804), cast<uint>(4094571909), cast<uint>(275423344), cast<uint>(430227734), cast<uint>(506948616), cast<uint>(659060556), cast<uint>(883997877), cast<uint>(958139571), cast<uint>(1322822218), cast<uint>(1537002063), cast<uint>(1747873779), cast<uint>(1955562222), cast<uint>(2024104815), cast<uint>(2227730452), cast<uint>(2361852424), cast<uint>(2428436474), cast<uint>(2756734187), cast<uint>(3204031479), cast<uint>(3329325298)];
-    let blocks <int> = padded_len / 64;
-    for (let b <int> = 0; b < blocks; b++) {
-        let blk <[char]> = new [char, 64]{};
-        for (let i <int> = 0; i < 64; i++) { blk[i] = msg[b * 64 + i]; }
-        compress(h, blk, k);
-        delete blk;
+    let w <[uint]> = new [uint, 64]{};
+    let tail <[char]> = new [char, 128]{};
+    let off <int> = 0;
+    // Subtraction avoids overflow even for a length close to INT_MAX.
+    while (len - off >= 64) {
+        compress(h, data, off, k, w);
+        off += 64;
     }
-    delete msg;
+    let rem <int> = len - off;
+    for (let i <int> = 0; i < 128; i++) { tail[i] = cast<char>(0); }
+    for (let i <int> = 0; i < rem; i++) { tail[i] = data[off + i]; }
+    tail[rem] = cast<char>(128);
+    let tail_len <int> = 64;
+    if (rem >= 56) { tail_len = 128; }
+    let bits <ulong> = cast<ulong>(len) * cast<ulong>(8);
+    for (let i <int> = 7; i >= 0; i--) {
+        tail[tail_len - 8 + i] = cast<char>(cast<int>(bits % cast<ulong>(256)));
+        bits = bits / cast<ulong>(256);
+    }
+    compress(h, tail, 0, k, w);
+    if (tail_len == 128) { compress(h, tail, 64, k, w); }
+    delete w;
+    delete tail;
+    delete k;
     let digest <[char]> = new [char, 32]{};
     for (let i <int> = 0; i < 8; i++) {
         let v <uint> = h[i];
@@ -171,13 +149,13 @@ priv fun sha256_raw(data: [char], len: int) <[char]> {
         digest[i * 4 + 3] = cast<char>(cast<int>(v % cast<uint>(256)));
     }
     delete h;
-    delete k;
     return digest;
 }
 
-// --- HMAC-SHA256 (RFC 2104) ---
-
 priv fun hmac_raw(key: [char], key_len: int, msg: [char], msg_len: int) <[char]> {
+    check_length(key, key_len);
+    check_length(msg, msg_len);
+    blame msg_len <= 2147483583, "crypto: HMAC message too large";
     let k0 <[char]> = new [char, 64]{};
     for (let i <int> = 0; i < 64; i++) { k0[i] = cast<char>(0); }
     if (key_len > 64) {
@@ -191,8 +169,8 @@ priv fun hmac_raw(key: [char], key_len: int, msg: [char], msg_len: int) <[char]>
     let outer <[char]> = new [char, 96]{};
     for (let i <int> = 0; i < 64; i++) {
         let kb <uint> = byte_at(k0, i);
-        inner[i] = cast<char>(cast<int>(bit_xor(kb, cast<uint>(54))));
-        outer[i] = cast<char>(cast<int>(bit_xor(kb, cast<uint>(92))));
+        inner[i] = cast<char>(cast<int>(xor32(kb, cast<uint>(54))));
+        outer[i] = cast<char>(cast<int>(xor32(kb, cast<uint>(92))));
     }
     delete k0;
     for (let i <int> = 0; i < msg_len; i++) { inner[64 + i] = msg[i]; }
@@ -205,115 +183,98 @@ priv fun hmac_raw(key: [char], key_len: int, msg: [char], msg_len: int) <[char]>
     return mac;
 }
 
-// --- public API ---
-
-// SHA-256 of a string as lowercase hex. Hashes bytes up to the first NUL;
-// for binary data use sha256_bytes_hex.
+// Raw digests are exactly 32 owned bytes, WITHOUT a string sentinel. Delete once.
+#[export]
+pub fun sha256_bytes(data: [char], len: int) <[char]> { return sha256_raw(data, len); }
+#[export]
+pub fun hmac_sha256_bytes(key: [char], key_len: int, message: [char], msg_len: int) <[char]> {
+    return hmac_raw(key, key_len, message, msg_len);
+}
+// String APIs hash bytes up to the first NUL. Hex strings are freshly allocated.
 #[export]
 pub fun sha256_hex(data: string) <string> {
-    let bytes <[char]> = to_chars(data);
-    let n <int> = bytes.length - 1;
-    let digest <[char]> = sha256_raw(bytes, n);
-    let hex <string> = hex_of_bytes(digest, 32);
+    let bytes <[char]> = string_bytes(data);
+    let hex <string> = sha256_bytes_hex(bytes, bytes.length - 1);
     delete bytes;
-    delete digest;
     return hex;
 }
-
-// SHA-256 of the first len bytes of a byte array as lowercase hex.
 #[export]
 pub fun sha256_bytes_hex(data: [char], len: int) <string> {
-    blame len >= 0, "sha256_bytes_hex: length must be non-negative";
-    let digest <[char]> = sha256_raw(data, len);
+    let digest <[char]> = sha256_bytes(data, len);
     let hex <string> = hex_of_bytes(digest, 32);
     delete digest;
     return hex;
 }
-
-// HMAC-SHA256 as lowercase hex (RFC 2104).
 #[export]
 pub fun hmac_sha256_hex(key: string, message: string) <string> {
-    let kb <[char]> = to_chars(key);
-    let mb <[char]> = to_chars(message);
-    let mac <[char]> = hmac_raw(kb, kb.length - 1, mb, mb.length - 1);
-    let hex <string> = hex_of_bytes(mac, 32);
+    blame message != null, "crypto: null string";
+    blame crypto_strlen(message) <= cast<ulong>(2147483583), "crypto: HMAC message too large";
+    let kb <[char]> = string_bytes(key);
+    let mb <[char]> = string_bytes(message);
+    let hex <string> = hmac_sha256_bytes_hex(kb, kb.length - 1, mb, mb.length - 1);
     delete kb;
     delete mb;
-    delete mac;
     return hex;
 }
-
-// HMAC-SHA256 over byte arrays as lowercase hex.
 #[export]
 pub fun hmac_sha256_bytes_hex(key: [char], key_len: int, message: [char], msg_len: int) <string> {
-    blame key_len >= 0 && msg_len >= 0, "hmac_sha256_bytes_hex: lengths must be non-negative";
-    let mac <[char]> = hmac_raw(key, key_len, message, msg_len);
+    let mac <[char]> = hmac_sha256_bytes(key, key_len, message, msg_len);
     let hex <string> = hex_of_bytes(mac, 32);
     delete mac;
     return hex;
 }
 
-// --- secure random (OS CSPRNG) ---
-
-// count cryptographically secure random bytes from /dev/urandom.
-// Linux-only in v0.1.0. The caller owns the returned array.
+// Preserve the historical count + 1 array length and trailing zero sentinel.
+// Linux-only; OS open/read failures abort rather than returning weak randomness.
 #[export]
 pub fun random_bytes(count: int) <[char]> {
-    blame count >= 0, "random_bytes: count must be non-negative";
+    blame count >= 0 && count <= 2147483646, "random_bytes: count outside allocation range";
     let buf <[char]> = new [char, count + 1]{};
     buf[count] = cast<char>(0);
     if (count > 0) {
         let f <&char> = crypto_fopen("/dev/urandom", "rb");
-        blame f != null, "random_bytes: cannot open /dev/urandom (Linux-only in v0.1.0)";
+        blame f != null, "random_bytes: cannot open /dev/urandom (Linux-only)";
         let got <ulong> = crypto_fread(&buf[0], cast<ulong>(1), cast<ulong>(count), f);
         crypto_fclose(f);
         blame got == cast<ulong>(count), "random_bytes: short read from /dev/urandom";
     }
     return buf;
 }
-
-// count random bytes as lowercase hex (2*count chars). Caller owns the result.
 #[export]
 pub fun random_hex(count: int) <string> {
+    // Check before random_bytes: reject impossible hex sizes before OS work.
+    blame count >= 0 && count <= 1073741823, "random_hex: count outside allocation range";
     let buf <[char]> = random_bytes(count);
     let hex <string> = hex_of_bytes(buf, count);
     delete buf;
     return hex;
 }
 
-// --- constant-time comparison ---
-
-// Compare two strings in constant time (no early exit). Returns false fast
-// on length mismatch — length is not considered secret. Use for comparing
-// MACs, tokens, and password hashes.
+// Full-scan comparison, intended for public-length MACs/tokens. No timing proof:
+// compilers/targets can transform this code; strings also require NUL scanning.
 #[export]
 pub fun const_time_eq(a: string, b: string) <bool> {
-    let ab <[char]> = to_chars(a);
-    let bb <[char]> = to_chars(b);
+    let ab <[char]> = string_bytes(a);
+    let bb <[char]> = string_bytes(b);
     let n <int> = ab.length - 1;
     if (bb.length - 1 != n) {
         delete ab;
         delete bb;
         return false;
     }
-    let diff <uint> = cast<uint>(0);
-    for (let i <int> = 0; i < n; i++) {
-        diff = bit_or(diff, bit_xor(byte_at(ab, i), byte_at(bb, i)));
-    }
+    let result <bool> = const_time_eq_bytes(ab, bb, n);
     delete ab;
     delete bb;
-    return diff == cast<uint>(0);
+    return result;
 }
-
-// Constant-time equality of the first len bytes of two arrays.
 #[export]
 pub fun const_time_eq_bytes(a: [char], b: [char], len: int) <bool> {
-    blame len >= 0, "const_time_eq_bytes: length must be non-negative";
-    let diff <uint> = cast<uint>(0);
+    check_length(a, len);
+    check_length(b, len);
+    let diff <int> = 0;
     for (let i <int> = 0; i < len; i++) {
-        diff = bit_or(diff, bit_xor(byte_at(a, i), byte_at(b, i)));
+        diff = diff | (cast<int>(a[i]) ^ cast<int>(b[i]));
     }
-    return diff == cast<uint>(0);
+    return diff == 0;
 }
-
 }

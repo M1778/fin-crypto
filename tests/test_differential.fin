@@ -1,0 +1,43 @@
+// Deterministic byte patterns are compared independently with Python hashlib/hmac.
+import { sha256_bytes, sha256_bytes_hex, hmac_sha256_bytes, hmac_sha256_bytes_hex } from crypto::fin;
+import { free_str } from strings::std;
+@define atoi(text: string) <int>;
+@define getenv(name: string) <string>;
+fun print_digest(digest: [char]) <noret> {
+    blame digest.length == 32, "raw digest must contain exactly 32 bytes";
+    for (let i <int> = 0; i < 32; i++) { printf("%02x", cast<int>(digest[i]) & 255); }
+    printf("\n");
+}
+fun main() <noret> {
+    let n <int> = atoi(getenv("CRYPTO_LEN"));
+    let kn <int> = atoi(getenv("CRYPTO_KEY_LEN"));
+    let mode <int> = atoi(getenv("CRYPTO_MODE"));
+    // Extra bytes verify that only the requested prefix is processed.
+    let data <[char]> = new [char, n + 3]{};
+    let key <[char]> = new [char, kn + 3]{};
+    for (let i <int> = 0; i < n + 3; i++) {
+        data[i] = cast<char>((i * 37 + i / 7) % 256);
+        if (mode == 1) { data[i] = 'a'; }
+    }
+    for (let i <int> = 0; i < kn + 3; i++) { key[i] = cast<char>((i * 19 + 128) % 256); }
+    let sh <[char]> = sha256_bytes(data, n);
+    let hm <[char]> = hmac_sha256_bytes(key, kn, data, n);
+    print_digest(sh);
+    print_digest(hm);
+    let sh_hex <string> = sha256_bytes_hex(data, n);
+    let hm_hex <string> = hmac_sha256_bytes_hex(key, kn, data, n);
+    printf("%s\n%s\n", sh_hex, hm_hex);
+    // APIs must not mutate caller buffers.
+    for (let i <int> = 0; i < n + 3; i++) {
+        let expected <char> = cast<char>((i * 37 + i / 7) % 256);
+        if (mode == 1) { expected = 'a'; }
+        blame data[i] == expected, "message mutated";
+    }
+    for (let i <int> = 0; i < kn + 3; i++) { blame key[i] == cast<char>((i * 19 + 128) % 256), "key mutated"; }
+    free_str(sh_hex);
+    free_str(hm_hex);
+    delete sh;
+    delete hm;
+    delete data;
+    delete key;
+}
