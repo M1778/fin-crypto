@@ -15,11 +15,11 @@ The earlier first execution caught a SHA-256 schedule bug (see CHANGELOG).
 passed fin-crypto's Linux x86-64/ARM64 and macOS x86-64/ARM64 builds/tests using
 `/dev/urandom`, at crypto revision `777990f2ef19ec7be6a69a628957ffb48da11974`.
 These are the per-project results, not the overall ecosystem job status.
-Native Windows x86-64/ARM64, macOS ARM64, and both Linux architectures passed
-this project's O0/O2 suite in [native run 40034272733](https://github.com/M1778/fin-sdk/actions/runs/40034272733),
+Native Linux, macOS and Windows, each on x86-64 and ARM64, passed this project's
+O0/O2 suite in [native run 40034937084](https://github.com/M1778/fin-sdk/actions/runs/40034937084),
 at crypto revision `b79d5ed5a408f2b306ec06c8b6f85231bcee1c54`. Windows executed
-its OS-backed `rand_s` branch. These are per-project results, not that run's
-overall ecosystem conclusion. The compiler was externally verified candidate
+its OS-backed `rand_s` branch. All thirteen projects passed across all six hosts
+in that run. The compiler was externally verified candidate
 `5360b051b8e82a4f10052c3dbb77bc66cc727cd7` from CI run `40028977601`, not a
 released compiler. Older published Fin `1f7afd97` lacks target selectors and
 chooses the wrong RNG branch on Windows. Use a matching verified compiler and
