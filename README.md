@@ -15,16 +15,15 @@ The earlier first execution caught a SHA-256 schedule bug (see CHANGELOG).
 passed fin-crypto's Linux x86-64/ARM64 and macOS x86-64/ARM64 builds/tests using
 `/dev/urandom`, at crypto revision `777990f2ef19ec7be6a69a628957ffb48da11974`.
 These are the per-project results, not the overall ecosystem job status.
-**Windows x86-64/ARM64 are blocked by the published compiler**, not merely
-awaiting CI: Fin revision `1f7afd97ab5ad520b78db3140d4f930aaeb74d1b` does not
-predefine `FIN_TARGET_WINDOWS` (nor the Darwin/Linux target macros). Consequently
-`#c_ifdef FIN_TARGET_WINDOWS` selects the non-Windows `/dev/urandom` path even in
-a native Windows build, and the random-source test fails there.
-
-The Windows `rand_s` implementation exists in source but has not passed native
-execution. It requires upstream compiler target-macro support and a successful
-native CI rerun; renaming the guard is not a supported workaround. UCRT linkage
-is intended to need no additional crypto import library or manual linker flags.
+Native Linux, macOS and Windows, each on x86-64 and ARM64, passed this project's
+O0/O2 suite in [native run 40034937084](https://github.com/M1778/fin-sdk/actions/runs/40034937084),
+at crypto revision `b79d5ed5a408f2b306ec06c8b6f85231bcee1c54`. Windows executed
+its OS-backed `rand_s` branch. All thirteen projects passed across all six hosts
+in that run. The compiler was externally verified candidate
+`5360b051b8e82a4f10052c3dbb77bc66cc727cd7` from CI run `40028977601`, not a
+released compiler. Older published Fin `1f7afd97` lacks target selectors and
+chooses the wrong RNG branch on Windows. Use a matching verified compiler and
+stdlib rather than renaming guards. UCRT needs no extra crypto import library.
 
 ## Install
 
@@ -123,11 +122,10 @@ NULs require a byte API). Auth consumers adopting raw HMAC must account for the
 - `random_bytes` preserves its trailing zero sentinel. Linux/macOS abort on
   `/dev/urandom` open failure or short read. The intended Windows branch aborts
   on any nonzero `rand_s` status and copies up to four bytes per successful
-  OS-backed call (never `rand`/`srand`), but published compiler `1f7afd97` does
-  not select this branch: native Windows tests fail trying `/dev/urandom`.
+  OS-backed call (never `rand`/`srand`). The native results above exercised that
+  branch with a verified compiler candidate; published `1f7afd97` cannot select it.
   There is no weak fallback or recoverable error API, and no early-boot
-  entropy-readiness guarantee for the `/dev/urandom` path. Native Linux/macOS
-  checks passed as recorded above; their results do not validate Windows.
+  entropy-readiness guarantee for the `/dev/urandom` path.
   Shape tests do not establish entropy quality.
 - SHA-256 alone is **not** suitable for password storage; use an appropriate,
   reviewed password KDF. Validate untrusted lengths before calling these APIs:
