@@ -1,0 +1,215 @@
+// =============================================================================
+// Fin Programming Language
+//
+// Made with ❤️ for someone special.
+//
+// This project is genuinely built on love and dedication, a way to express your love can be done through Fin.
+// Fin is a semi-object-orientated programming language that specialized in control, giving so much control to the user while asking for the bare minimum.
+// Fin is the name of the Angel from BlackNightmare-Stories not yet published.
+// “Love is the reason this project exists”
+// -----------------------------------------------------------------------------
+// Author: M1778
+// Repository: https://github.com/M1778/fin-crypto
+// Profile: https://github.com/M1778M/
+// -----------------------------------------------------------------------------
+// Copyright (C) 2027 M1778
+//
+// This file is part of fin-crypto, a project for the Fin Programming Language.
+//
+// Licensed under the MIT License. See LICENSE in the repository root.
+//
+// SPDX-License-Identifier: MIT
+// =============================================================================
+
+// Published SHA-256 and HMAC-SHA256 test vectors with exact hex assertions.
+//
+// Every expected value below comes from FIPS 180-4, RFC 4231, or an independent
+// reference computed with Python's hashlib/hmac (the pattern is stated beside
+// each group). Nothing here is derived from this library's own output: a hash
+// tested only against itself proves nothing.
+import { sha256_hex, sha256_bytes, sha256_bytes_hex, hmac_sha256_hex, hmac_sha256_bytes_hex } from crypto::fin;
+import { to_chars, free_str } from strings::std;
+
+// stdout is block-buffered in a piped run, so a diagnostic printed just before
+// an aborting blame would be lost. Flush first: a failing vector must say which.
+#[llvm_name="fflush"]
+@define c_fflush(stream: &char) <int>;
+
+fun fail(what: string) <noret> {
+    printf("FAIL: %s\n", what);
+    c_fflush(null);
+    blame false, "vector mismatch";
+}
+
+fun expect_hex(name: string, actual: string, expected: string) <noret> {
+    if (actual != expected) {
+        printf("FAIL: %s\n  expected %s\n  actual   %s\n", name, expected, actual);
+        free_str(actual);
+        c_fflush(null);
+        blame false, "vector mismatch";
+    }
+    free_str(actual);
+}
+
+fun fill(bytes: [char], count: int, value: int) <noret> {
+    for (let i <int> = 0; i < count; i++) { bytes[i] = cast<char>(value); }
+}
+
+fun main() <noret> {
+    // --- FIPS 180-4 SHA-256, the canonical vectors ---
+    expect_hex("sha256 empty", sha256_hex(""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    expect_hex("sha256 abc", sha256_hex("abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    expect_hex("sha256 448-bit", sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    // FIPS 180-4 B.3: the 896-bit two-block message.
+    expect_hex("sha256 896-bit", sha256_hex("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
+        "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1");
+
+    // --- Non-ASCII bytes: a Fin string literal holds UTF-8 ---
+    expect_hex("sha256 utf-8", sha256_hex("héllo"),
+        "3c48591d8d098a4538f5e013dfcf406e948eac4d3277b10bf614e295d6068179");
+
+    // --- Padding boundaries. 55/56/57 straddle the length word, 63/64/65 the
+    //     block edge, 119/120/127/128/129 two blocks. Input byte i is
+    //     (i*37 + i/7) % 256; expected values are Python hashlib. ---
+    let raw <[char]> = new [char, 256]{};
+    for (let i <int> = 0; i < 256; i++) { raw[i] = cast<char>((i * 37 + i / 7) % 256); }
+    expect_hex("sha256 n=55", sha256_bytes_hex(raw, 55),
+        "55b2b17d3d21f257ac42ecf3d96a4a1bbc512146a5f96cab130987e7fb7e9980");
+    expect_hex("sha256 n=56", sha256_bytes_hex(raw, 56),
+        "aaf3fec3b4a16353384970ae903f7c4d1ef33d3dec22d56c8a4d77ae3b63278c");
+    expect_hex("sha256 n=57", sha256_bytes_hex(raw, 57),
+        "efd6b7b4e2d2cc2ba7ef1a741f7655d132b913afbdc3d72c0a9dca734dd4e79d");
+    expect_hex("sha256 n=63", sha256_bytes_hex(raw, 63),
+        "6fefff3c6e0ed3b0b18b71fa42a643f02a62e2efaf099b94ab3e97a93fa65f44");
+    expect_hex("sha256 n=64 (block)", sha256_bytes_hex(raw, 64),
+        "fad6596f7bd91c41537eccdc9f00c6513911007ac6a1db638761346e41ecc0a4");
+    expect_hex("sha256 n=65", sha256_bytes_hex(raw, 65),
+        "f0cd0f9fa753bbb22d5071c2a5f2aa24504acf460ecb70e78314d03112bdf764");
+    expect_hex("sha256 n=119", sha256_bytes_hex(raw, 119),
+        "765496f9cb482f5d81f03b4e513d72199fc298e94104e372cdfc73012b80d50f");
+    expect_hex("sha256 n=120", sha256_bytes_hex(raw, 120),
+        "f22a8b42f93aeef9e1406265091306d3e34bd2597142f97819cfdfaca7973665");
+    expect_hex("sha256 n=127", sha256_bytes_hex(raw, 127),
+        "3f61b1a79ee27e49a450c30ee635544d3738e7da1a8dd966fe66fdf80a53c896");
+    expect_hex("sha256 n=128", sha256_bytes_hex(raw, 128),
+        "812179180224381e3f7b1102058a73c4d5ae0be663c7bf21f79208db16f3eec4");
+    expect_hex("sha256 n=129", sha256_bytes_hex(raw, 129),
+        "36b239f552f6adc61b40787da101babd06600511b9d744316c1a3745e1843049");
+    // Every byte value 0..255, including high bytes that are negative as `char`.
+    // Refill so this case is literally bytes(range(256)), not the pattern above.
+    for (let i <int> = 0; i < 256; i++) { raw[i] = cast<char>(i); }
+    expect_hex("sha256 all byte values", sha256_bytes_hex(raw, 256),
+        "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880");
+    delete raw;
+
+    // --- HMAC-SHA256, RFC 4231 cases 1-7 ---
+    let k20 <[char]> = new [char, 25]{};
+    let m50 <[char]> = new [char, 50]{};
+    let k131 <[char]> = new [char, 131]{};
+    fill(k131, 131, 170);
+    // Each case sets its own key and data; nothing is reused by accident.
+    // case 1: key 20 x 0x0b, data "Hi There"
+    fill(k20, 20, 11);
+    let hi <[char]> = to_chars("Hi There");
+    expect_hex("rfc4231 case 1", hmac_sha256_bytes_hex(k20, 20, hi, 8),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    delete hi;
+    // case 2: key "Jefe", data "what do ya want for nothing?"
+    expect_hex("rfc4231 case 2", hmac_sha256_hex("Jefe", "what do ya want for nothing?"),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    // case 3: key 20 x 0xaa, data 50 x 0xdd
+    fill(k20, 20, 170);
+    fill(m50, 50, 221);
+    expect_hex("rfc4231 case 3", hmac_sha256_bytes_hex(k20, 20, m50, 50),
+        "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe");
+    // case 4: key 0x01..0x19, data 50 x 0xcd
+    for (let i <int> = 0; i < 25; i++) { k20[i] = cast<char>(i + 1); }
+    fill(m50, 50, 205);
+    expect_hex("rfc4231 case 4", hmac_sha256_bytes_hex(k20, 25, m50, 50),
+        "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b");
+    // Case 5 key is 20 bytes of 0x0c; RFC truncates the MAC, this asserts all 32.
+    // case 5: key 20 x 0x0c, data "Test With Truncation"
+    fill(k20, 20, 12);
+    let trunc <[char]> = to_chars("Test With Truncation");
+    expect_hex("rfc4231 case 5 (full MAC)", hmac_sha256_bytes_hex(k20, 20, trunc, 20),
+        "a3b6167473100ee06e0c796c2955552bfa6f7c0a6a8aef8b93f860aab0cd20c5");
+    delete trunc;
+    let k6 <[char]> = to_chars("Test Using Larger Than Block-Size Key - Hash Key First");
+    expect_hex("rfc4231 case 6", hmac_sha256_bytes_hex(k131, 131, k6, k6.length - 1),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+    delete k6;
+    let k7 <[char]> = to_chars("This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.");
+    expect_hex("rfc4231 case 7", hmac_sha256_bytes_hex(k131, 131, k7, k7.length - 1),
+        "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2");
+    delete k7;
+    delete k20;
+    delete m50;
+    delete k131;
+
+    // --- Empty key, empty message: HMAC still runs both inner and outer
+    //     hashes over a zeroed block. Skipping them is the classic bug. ---
+    let nothing <[char]> = new [char, 0]{};
+    expect_hex("hmac empty key and message", hmac_sha256_bytes_hex(nothing, 0, nothing, 0),
+        "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad");
+    expect_hex("hmac empty key, abc", hmac_sha256_hex("", "abc"),
+        "fd7adb152c05ef80dccf50a1fa4c05d5a3ec6da95575fc312ae7c5d091836351");
+    delete nothing;
+
+    // --- Key of exactly 64 bytes (used raw) vs 65 (hashed first), the branch a
+    //     broken HMAC always gets wrong. Reference: Python hmac. ---
+    let key <[char]> = new [char, 65]{};
+    fill(key, 65, 170);
+    let msg <[char]> = new [char, 65]{};
+    for (let i <int> = 0; i < 65; i++) { msg[i] = cast<char>((i * 37 + i / 7) % 256); }
+    expect_hex("hmac key 64, message 64", hmac_sha256_bytes_hex(key, 64, msg, 64),
+        "c7f87eab122bc92d7ddde41cd1fc248ef97184ecf6318511b214285f55637270");
+    expect_hex("hmac key 65, message 64", hmac_sha256_bytes_hex(key, 65, msg, 64),
+        "c3a853c8457b2c19d5125d2c5cd96394dc409b8fb2d6d2a312ecef43de7a14c7");
+    expect_hex("hmac m55 k64", hmac_sha256_bytes_hex(key, 64, msg, 55),
+        "0e86d393fd58d4f8b50decd06e412cea1b86303ad5a714daf508f5aa67cdeec4");
+    expect_hex("hmac m56 k64", hmac_sha256_bytes_hex(key, 64, msg, 56),
+        "a2ba1d14b57b093dd813419f3ba1094c957f1cae1b50c548b600c9363350e63c");
+    expect_hex("hmac m56 k65", hmac_sha256_bytes_hex(key, 65, msg, 56),
+        "c9c6a892754ad6121555cb595b9a9204cdd8b81538991963587729e82d676423");
+    expect_hex("hmac m65 k65", hmac_sha256_bytes_hex(key, 65, msg, 65),
+        "cfdbf7c0bca1ce398cf709219cfc4fa9b62bd20f88be626da35f0c9c3b0875b5");
+    delete key;
+    delete msg;
+
+    // --- FIPS 180-4: SHA-256 of one million 'a' characters ---
+    let million <[char]> = new [char, 1000000]{};
+    for (let i <int> = 0; i < 1000000; i++) { million[i] = 'a'; }
+    expect_hex("sha256 one million 'a'", sha256_bytes_hex(million, 1000000),
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    delete million;
+
+    // --- Raw digests: exactly 32 owned bytes, no sentinel, separate buffers. ---
+    // Fin's `==` on arrays compares contents, so aliasing is proven by mutating
+    // one result and observing that the other still holds the true digest.
+    let abc <[char]> = to_chars("abc");
+    let d1 <[char]> = sha256_bytes(abc, 3);
+    let d2 <[char]> = sha256_bytes(abc, 3);
+    if (d1.length != 32) { fail("raw digest length"); }
+    if (d1 != d2) { fail("repeated raw digest differs"); }
+    d1[0] = cast<char>(0);
+    if (d1 == d2) { fail("two digests share one buffer"); }
+    if ((cast<int>(d2[0]) & 255) != 186) { fail("second digest was corrupted"); }
+    delete d1;
+    delete d2;
+    delete abc;
+
+    // --- Only the requested prefix is read, and the input is not mutated. ---
+    let guard <[char]> = new [char, 8]{};
+    for (let i <int> = 0; i < 8; i++) { guard[i] = cast<char>(i); }
+    expect_hex("prefix only", sha256_bytes_hex(guard, 4),
+        "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8");
+    for (let i <int> = 0; i < 8; i++) {
+        if (cast<int>(guard[i]) != i) { fail("input buffer mutated"); }
+    }
+    delete guard;
+
+    printf("vectors: FIPS 180-4, RFC 4231, padding and key-boundary cases passed\n");
+}

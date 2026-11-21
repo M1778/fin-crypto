@@ -21,20 +21,36 @@
 // SPDX-License-Identifier: MIT
 // =============================================================================
 
-// Deterministic byte patterns are compared independently with Python hashlib/hmac.
+// Differential test: this program prints digests for the byte pattern the
+// Python runner asks for, and the runner compares them with hashlib/hmac.
+// Run directly with no CRYPTO_LEN, it reports that it needs the runner instead
+// of crashing, so `finn test` can execute every test file as a program.
+//
+// The runner is tests/run_tests.py.
 import { sha256_bytes, sha256_bytes_hex, hmac_sha256_bytes, hmac_sha256_bytes_hex } from crypto::fin;
 import { free_str } from strings::std;
 @define atoi(text: string) <int>;
 @define getenv(name: string) <string>;
+
 fun print_digest(digest: [char]) <noret> {
     blame digest.length == 32, "raw digest must contain exactly 32 bytes";
     for (let i <int> = 0; i < 32; i++) { printf("%02x", cast<int>(digest[i]) & 255); }
     printf("\n");
 }
+
 fun main() <noret> {
-    let n <int> = atoi(getenv("CRYPTO_LEN"));
-    let kn <int> = atoi(getenv("CRYPTO_KEY_LEN"));
-    let mode <int> = atoi(getenv("CRYPTO_MODE"));
+    let raw_len <string> = getenv("CRYPTO_LEN");
+    let raw_key_len <string> = getenv("CRYPTO_KEY_LEN");
+    if (raw_len == null || raw_key_len == null) {
+        printf("test_differential: needs CRYPTO_LEN and CRYPTO_KEY_LEN; run tests/run_tests.py\n");
+        return;
+    }
+    let n <int> = atoi(raw_len);
+    let kn <int> = atoi(raw_key_len);
+    let raw_mode <string> = getenv("CRYPTO_MODE");
+    let mode <int> = 0;
+    if (raw_mode != null) { mode = atoi(raw_mode); }
+    blame n >= 0 && kn >= 0, "lengths must be nonnegative";
     // Extra bytes verify that only the requested prefix is processed.
     let data <[char]> = new [char, n + 3]{};
     let key <[char]> = new [char, kn + 3]{};
