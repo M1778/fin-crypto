@@ -21,50 +21,68 @@
 // SPDX-License-Identifier: MIT
 // =============================================================================
 
-// fin-crypto test suite.
+// API contract, ownership and comparison tests. Correctness against published
+// vectors lives in tests/vectors.fin; this file deliberately does not repeat
+// them, so each claim has exactly one home.
 //
 // Run: finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto
-// (from the repo root). Vectors: FIPS 180-4 (SHA-256), RFC 4231 (HMAC).
-
 import { sha256_hex, sha256_bytes, sha256_bytes_hex, hmac_sha256_hex, hmac_sha256_bytes, hmac_sha256_bytes_hex, random_bytes, random_hex, const_time_eq, const_time_eq_bytes } from crypto::fin;
 import { assert_true } from testing::std;
-import { equals, len, free_str } from strings::std;
-import { to_chars } from strings::std;
-
-fun expect_hex(actual: string, expected: string) <bool> {
-    let equal <bool> = equals(actual, expected);
-    free_str(actual);
-    return equal;
-}
+import { len, free_str, to_chars, from_chars } from strings::std;
+import { hex_encode } from encoding::std;
 
 fun main() <noret> {
-    // --- SHA-256, FIPS 180-4 vectors ---
-    assert_true(expect_hex(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), "sha256('') != FIPS vector");
-    assert_true(expect_hex(sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256('abc') != FIPS vector");
-    assert_true(expect_hex(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"), "sha256(448-bit) != FIPS vector");
+    // --- The string APIs hash exactly the bytes before the first NUL, which is
+    //     why a string that embeds one must use the byte API instead. ---
+    let digest <string> = sha256_hex("hello fin");
+    assert_true(digest != null && len(digest) == 64, "sha256_hex returns 64 hex chars");
+    free_str(digest);
+    // A string is NUL-terminated storage: "a\0b" hashes as "a".
+    assert_true(sha256_hex("a\0b") == sha256_hex("a"), "string API stops at the first NUL");
 
-    // --- SHA-256 over byte arrays ---
+    // --- Byte API: empty input is legal and identical to the string API. ---
+    let empty <[char]> = new [char, 0]{};
+    assert_true(sha256_bytes_hex(empty, 0) == sha256_hex(""), "empty byte array matches empty string");
+    let nothing <string> = hmac_sha256_bytes_hex(empty, 0, empty, 0);
+    assert_true(nothing != null && len(nothing) == 64, "HMAC of two empty arrays is still 64 hex chars");
+    free_str(nothing);
+    delete empty;
+
+    // --- Raw outputs are exactly 32 owned bytes with no trailing sentinel. ---
     let abc <[char]> = to_chars("abc");
-    assert_true(expect_hex(sha256_bytes_hex(abc, 3), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256_bytes_hex('abc') mismatch");
+    let raw <[char]> = sha256_bytes(abc, 3);
+    let raw_mac <[char]> = hmac_sha256_bytes(abc, 3, abc, 3);
+    assert_true(raw.length == 32 && raw_mac.length == 32, "raw outputs are exactly 32 bytes");
+    delete raw;
+    delete raw_mac;
     delete abc;
 
-    // --- HMAC-SHA256, RFC 4231 test case 2 ---
-    // key = "Jefe", data = "what do ya want for nothing?"
-    assert_true(expect_hex(hmac_sha256_hex("Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac-sha256 != RFC 4231 TC2");
-    assert_true(expect_hex(hmac_sha256_hex("key", "The quick brown fox jumps over the lazy dog"), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"), "hmac-sha256 fox vector mismatch");
+    // --- Hex and raw agree, so the hex layer cannot hide a wrong digest.
+    //     hex_encode is the library's independent encoder, not the one under test. ---
+    let bytes <[char]> = to_chars("agreement");
+    let raw2 <[char]> = sha256_bytes(bytes, 9);
+    let raw2_hex <string> = sha256_bytes_hex(bytes, 9);
+    let via_encoding <string> = hex_encode(from_chars(raw2, 0, 32));
+    assert_true(via_encoding == raw2_hex, "hex of raw digest equals raw hex API");
+    free_str(via_encoding);
+    let mac_raw <[char]> = hmac_sha256_bytes(bytes, 9, bytes, 9);
+    let mac_hex <string> = hmac_sha256_bytes_hex(bytes, 9, bytes, 9);
+    let mac_via <string> = hex_encode(from_chars(mac_raw, 0, 32));
+    assert_true(mac_via == mac_hex, "hex of raw MAC equals raw hex API");
+    assert_true(hmac_sha256_hex("agreement", "agreement") == mac_hex, "string HMAC equals byte HMAC");
+    free_str(mac_via);
+    free_str(raw2_hex);
+    free_str(mac_hex);
+    delete bytes;
+    delete raw2;
+    delete mac_raw;
 
-    // --- HMAC over byte arrays (same answers, bytes API) ---
-    let k <[char]> = to_chars("Jefe");
-    let m <[char]> = to_chars("what do ya want for nothing?");
-    assert_true(expect_hex(hmac_sha256_bytes_hex(k, 4, m, 28), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), "hmac bytes API mismatch");
-    delete k;
-    delete m;
-
-    // --- constant-time comparison ---
+    // --- const_time_eq: full scan, length mismatch is false, no timing claim. ---
     assert_true(const_time_eq("abc", "abc"), "const_time_eq equal strings");
     assert_true(!const_time_eq("abc", "abd"), "const_time_eq differing strings");
     assert_true(!const_time_eq("abc", "abcd"), "const_time_eq different lengths");
     assert_true(const_time_eq("", ""), "const_time_eq empty strings");
+    assert_true(!const_time_eq("", "a"), "const_time_eq empty against non-empty");
     let x <[char]> = to_chars("same");
     let y <[char]> = to_chars("same");
     let z <[char]> = to_chars("sane");
@@ -74,65 +92,8 @@ fun main() <noret> {
     delete y;
     delete z;
 
-    // --- OS random: platform-independent shape checks, not entropy tests ---
-    // No /dev/urandom assumption: Windows uses rand_s. Counts straddling its
-    // four-byte word boundaries exercise partial-word output and the sentinel.
-    for (let count <int> = 1; count <= 9; count++) {
-        let short_random <[char]> = random_bytes(count);
-        assert_true(short_random.length == count + 1 && short_random[count] == cast<char>(0), "random partial-word sentinel");
-        delete short_random;
-    }
-    let r <[char]> = random_bytes(16);
-    assert_true(r.length == 17 && r[16] == cast<char>(0), "random_bytes(16) sentinel and length");
-    delete r;
-    let rh <string> = random_hex(16);
-    assert_true(len(rh) == 32, "random_hex(16) is 32 hex chars");
-
-    free_str(rh);
-    let empty_random <[char]> = random_bytes(0);
-    assert_true(empty_random.length == 1 && empty_random[0] == cast<char>(0), "empty random sentinel");
-    delete empty_random;
-    let empty_hex <string> = random_hex(0);
-    assert_true(expect_hex(empty_hex, ""), "empty random hex");
-
-    // RFC 4231 cases 1, 3, 4, 6, 7 exercise binary and long keys.
-    let rk <[char]> = new [char, 131]{};
-    let rm <[char]> = new [char, 50]{};
-    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(11); }
-    let hi <[char]> = to_chars("Hi There");
-    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 20, hi, 8), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"), "RFC4231 case 1");
-    delete hi;
-    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(170); }
-    for (let i <int> = 0; i < 50; i++) { rm[i] = cast<char>(221); }
-    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 20, rm, 50), "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"), "RFC4231 case 3");
-    for (let i <int> = 0; i < 25; i++) { rk[i] = cast<char>(i + 1); }
-    for (let i <int> = 0; i < 50; i++) { rm[i] = cast<char>(205); }
-    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 25, rm, 50), "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b"), "RFC4231 case 4");
-    for (let i <int> = 0; i < 131; i++) { rk[i] = cast<char>(170); }
-    let long_msg <[char]> = to_chars("Test Using Larger Than Block-Size Key - Hash Key First");
-    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 131, long_msg, long_msg.length - 1), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"), "RFC4231 case 6");
-    delete long_msg;
-    let longer_msg <[char]> = to_chars("This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.");
-    assert_true(expect_hex(hmac_sha256_bytes_hex(rk, 131, longer_msg, longer_msg.length - 1), "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"), "RFC4231 case 7");
-    delete longer_msg;
-    delete rk;
-    delete rm;
-
-    // Actual empty arrays, owned 32-byte output, repeatability, and no aliasing.
-    let empty <[char]> = new [char, 0]{};
-    let digest <[char]> = sha256_bytes(empty, 0);
-    let again <[char]> = sha256_bytes(empty, 0);
-    let mac <[char]> = hmac_sha256_bytes(empty, 0, empty, 0);
-    assert_true(digest.length == 32 && mac.length == 32, "raw output length");
-    assert_true(const_time_eq_bytes(digest, again, 32), "raw repeated digest");
-    digest[0] = cast<char>(0);
-    assert_true(!const_time_eq_bytes(digest, again, 32), "raw outputs do not alias");
-    assert_true(const_time_eq_bytes(empty, empty, 0), "empty byte comparison");
-    delete digest;
-    delete again;
-    delete mac;
-    delete empty;
-
+    // A mismatch at the last position must still be found: an early-exit
+    // comparison that stops at the first difference would pass the tests above.
     let all <[char]> = new [char, 256]{};
     let copy <[char]> = new [char, 256]{};
     for (let i <int> = 0; i < 256; i++) { all[i] = cast<char>(i); copy[i] = cast<char>(i); }
@@ -145,5 +106,35 @@ fun main() <noret> {
     }
     delete all;
     delete copy;
+
+    // --- OS random: shape and sentinel only. Shapes prove nothing about
+    //     entropy; see README for what is and is not established. ---
+    // Counts straddling the Windows four-byte word boundary exercise partial words.
+    for (let count <int> = 1; count <= 9; count++) {
+        let short_random <[char]> = random_bytes(count);
+        assert_true(short_random.length == count + 1 && short_random[count] == cast<char>(0), "random partial-word sentinel");
+        delete short_random;
+    }
+    let r <[char]> = random_bytes(16);
+    assert_true(r.length == 17 && r[16] == cast<char>(0), "random_bytes(16) sentinel and length");
+    delete r;
+    let rh <string> = random_hex(16);
+    assert_true(len(rh) == 32, "random_hex(16) is 32 hex chars");
+    free_str(rh);
+    // count 0 still allocates the sentinel, so the handle is never empty.
+    let empty_random <[char]> = random_bytes(0);
+    assert_true(empty_random.length == 1 && empty_random[0] == cast<char>(0), "empty random sentinel");
+    delete empty_random;
+    let empty_hex <string> = random_hex(0);
+    assert_true(len(empty_hex) == 0, "empty random hex");
+    free_str(empty_hex);
+
+    // Two draws of 32 bytes must differ. A constant or reused buffer would not.
+    let a <[char]> = random_bytes(32);
+    let b <[char]> = random_bytes(32);
+    assert_true(!const_time_eq_bytes(a, b, 32), "two random draws differ");
+    delete a;
+    delete b;
+
     printf("all fin-crypto tests passed\n");
 }

@@ -21,11 +21,20 @@
 // SPDX-License-Identifier: MIT
 // =============================================================================
 
-// SPDX-License-Identifier: MIT
-// SHA-256/HMAC-SHA256 in pure Fin; OS randomness via UCRT rand_s on Windows,
-// /dev/urandom on Linux/macOS. Native Windows/macOS execution is CI-pending.
-// Native 32-bit operations validated with finc 0.4.0 at O0/O2. Functional
-// vectors and assembly inspection are not a cryptographic or timing audit.
+// SHA-256 and HMAC-SHA256 implemented in Fin, plus OS-backed randomness.
+//
+// Threat model, stated plainly:
+//   * The hash and MAC are hand-written here, not calls into OpenSSL or
+//     libsodium. They match published vectors, but they are not audited, and
+//     no side-channel measurement has been made.
+//   * `const_time_eq*` scans every byte and has no early exit, but that is a
+//     source-level property. There is no timing proof; see README.
+//   * Randomness is /dev/urandom on Linux/macOS and UCRT rand_s on Windows.
+//     Both abort rather than returning partial or weak bytes.
+//
+// Windows is supported by this source through `#c_ifdef FIN_TARGET_WINDOWS`;
+// whether the Windows branch has executed on real hardware is recorded in the
+// README, not assumed here.
 
 #[stdimport] %{
 import { to_chars, from_chars } from strings::std;

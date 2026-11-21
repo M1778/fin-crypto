@@ -1,7 +1,9 @@
 .finn/
 out/
+.toolchain/
 *.o
 *.obj
 *.exe
 test_crypto
 basic
+example_basic

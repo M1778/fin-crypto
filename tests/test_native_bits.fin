@@ -21,18 +21,33 @@
 // SPDX-License-Identifier: MIT
 // =============================================================================
 
-// Runtime operands prevent these bit-pattern checks being only constant folding.
+// Pins the compiler behaviour the SHA-256 arithmetic depends on: runtime
+// operands (not constants) for 32-bit signed casts, logical right shift, XOR,
+// OR, AND and wrapping addition. If a future finc changes any of these, the
+// hashes break silently, so this test fails first.
+//
+// Run: CRYPTO_HIGH=-2147483648 finc tests/test_native_bits.fin -I src -o test_native_bits && ./test_native_bits
+// With no CRYPTO_HIGH the default is the same value, so `finn test` works.
 @define atoi(text: string) <int>;
 @define getenv(name: string) <string>;
+
 fun main() <noret> {
-    let high <uint> = cast<uint>(atoi(getenv("CRYPTO_HIGH")));
+    let raw <string> = getenv("CRYPTO_HIGH");
+    let input <int> = -2147483648;
+    if (raw != null) { input = atoi(raw); }
+    // Cast through a runtime operand so this cannot be constant-folded away.
+    let high <uint> = cast<uint>(input);
     let low <uint> = cast<uint>(2147483647);
-    blame cast<int>(high) < 0;
-    blame cast<uint>(cast<int>(high) ^ cast<int>(low)) == cast<uint>(4294967295);
-    blame cast<uint>(cast<int>(high) | cast<int>(low)) == cast<uint>(4294967295);
-    blame cast<uint>(cast<int>(high) & cast<int>(low)) == cast<uint>(0);
-    blame high >> cast<uint>(31) == cast<uint>(1);
-    blame (high + high) == cast<uint>(0);
-    blame cast<uint>(4294967295) + cast<uint>(1) == cast<uint>(0);
+    blame cast<int>(high) < 0, "uint with the high bit set must cast back to negative int";
+    blame cast<uint>(cast<int>(high) ^ cast<int>(low)) == cast<uint>(4294967295), "xor32";
+    blame cast<uint>(cast<int>(high) | cast<int>(low)) == cast<uint>(4294967295), "or32";
+    blame cast<uint>(cast<int>(high) & cast<int>(low)) == cast<uint>(0), "and32";
+    blame high >> cast<uint>(31) == cast<uint>(1), "uint >> is logical";
+    blame (high + high) == cast<uint>(0), "addition wraps at 32 bits";
+    blame cast<uint>(4294967295) + cast<uint>(1) == cast<uint>(0), "0xffffffff + 1 wraps to 0";
+    // rotate_right's shape: (n >> s) + (n << (32 - s)) must be a true rotate.
+    blame (cast<uint>(1) >> cast<uint>(1)) == cast<uint>(0), "shift right";
+    blame (cast<uint>(1) << cast<uint>(31)) == cast<uint>(2147483648), "shift left into the sign bit";
+    blame ((cast<uint>(2147483648) >> cast<uint>(31)) | (cast<uint>(2147483648) << cast<uint>(1))) == cast<uint>(1), "rotate by 31";
     printf("native bit patterns and uint wrapping passed\n");
 }
