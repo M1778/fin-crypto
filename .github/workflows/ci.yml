@@ -47,11 +47,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pinned finc
-        run: python3 -I .github/scripts/install_finc.py --dest .finc
+      # The published Linux artifact for ARM64 exists only as a dynamically
+      # linked build that needs libLLVM.so.22.1, and the macOS artifacts link a
+      # Homebrew libLLVM.dylib. The runtime must exist before the installer runs
+      # its own `finc --version` check, or a usable compiler looks broken.
+      - name: Install Linux LLVM runtime
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main' \
+            | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-22 clang-22
 
-      # The macOS artifact links a Homebrew LLVM dylib, so the runtime must be
-      # present before the compiler will start.
       - name: Install macOS LLVM runtime
         if: runner.os == 'macOS'
         run: brew install llvm@22
@@ -59,6 +69,19 @@ jobs:
       - name: Install Windows linker toolchain
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+
+      # install_finc.py ends by printing `::add-path::`, a workflow command
+      # GitHub has disabled; the runner turns it into a step failure. The
+      # compiler is invoked by explicit path here, so the line is filtered
+      # rather than suppressed with ACTIONS_ALLOW_UNSECURE_COMMANDS.
+      - name: Install pinned finc
+        run: |
+          set -euo pipefail
+          python3 -I .github/scripts/install_finc.py --dest .finc > install_finc.log 2>&1 || {
+            cat install_finc.log
+            exit 1
+          }
+          grep -v '^::add-path::' install_finc.log
 
       - name: Show compiler identity, require contract 3
         run: |
