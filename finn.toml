@@ -1,11 +1,10 @@
 [project]
 name = "fin-crypto"
-version = "0.1.1"
+version = "0.2.0"
 envpath = ".finn"
-entrypoint = "crypto.fin"
 
 [packages]
 
 [scripts]
 check = "finc src/crypto.fin"
-test = "finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto"
+test = "python3 -I tests/run_tests.py"
