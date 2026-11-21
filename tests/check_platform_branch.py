@@ -163,7 +163,10 @@ def main():
         return
 
     def has(syms, name):
-        return re.search(rf"\b{name}\b", syms) is not None
+        # Mach-O prefixes external symbols with an underscore (_rand_s), ELF and
+        # COFF do not, so the boundary must permit one. A bare word-boundary
+        # pattern reported every macOS symbol as missing.
+        return re.search(rf"(?<![A-Za-z0-9_])_?{name}(?![A-Za-z0-9_])", syms) is not None
 
     failures = []
     # The forced copy must always take the Windows path, on every runner.
