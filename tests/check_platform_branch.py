@@ -63,6 +63,40 @@ fun main() <noret> {
 }
 """
 
+# No single target macro is defined on every host: FIN_TARGET_LINUX on Linux,
+# FIN_TARGET_DARWIN on macOS, FIN_TARGET_WINDOWS on Windows. Substituting a
+# name that the current host does not define silently selects the POSIX branch,
+# which is how an ARM64 runner reported a working guard as broken. The host
+# macro is therefore discovered by asking the preprocessor, not assumed.
+CANDIDATE_MACROS = ("FIN_TARGET_WINDOWS", "FIN_TARGET_LINUX",
+                    "FIN_TARGET_DARWIN", "FIN_TARGET_X86_64", "FIN_TARGET_ARM64")
+
+
+def defined_macro(finc, work, libs_flags):
+    """Return one target macro the host compiler defines, or None."""
+    for macro in CANDIDATE_MACROS:
+        probe = work / f"probe_{macro}.fin"
+        probe.write_text(
+            "fun main() <noret> {\n"
+            f"#c_ifdef {macro}\n"
+            "    printf(\"defined\\n\");\n"
+            "#c_else\n"
+            "    printf(\"absent\\n\");\n"
+            "#c_endif\n"
+            "}\n")
+        binary = work / f"probe_{macro}"
+        subprocess.run([finc, str(probe), *libs_flags, "-o", str(binary)],
+                       check=True, capture_output=True, text=True)
+        out = subprocess.run([str(binary)], capture_output=True, text=True, check=True)
+        if out.stdout.strip() == "defined":
+            return macro
+    return None
+
+
+def force_guard(text, host_macro):
+    """Rewrite only the guard condition; the Windows branch body is verbatim."""
+    return text.replace("#c_ifdef FIN_TARGET_WINDOWS", f"#c_ifdef {host_macro}")
+
 
 def symbol_dump(object_file):
     """Symbols from the first available tool.
@@ -112,10 +146,14 @@ def main():
         native_dir.mkdir()
         windows_dir.mkdir()
         shutil.copy(SRC, native_dir / "crypto.fin")
-        # Only the guard condition changes; the Windows branch body is verbatim.
-        windows = text.replace("#c_ifdef FIN_TARGET_WINDOWS",
-                               "#c_ifdef FIN_TARGET_X86_64")
-        (windows_dir / "crypto.fin").write_text(windows, encoding="utf-8")
+
+        host_macro = defined_macro(args.finc, work, libs_flags)
+        if host_macro is None:
+            print("platform branch: skipped, the compiler predefines no target macro "
+                  "this check can use")
+            return
+        (windows_dir / "crypto.fin").write_text(force_guard(text, host_macro),
+                                                encoding="utf-8")
 
         host = build(args.finc, native_dir, work, libs_flags)
         forced = build(args.finc, windows_dir, work, libs_flags)
