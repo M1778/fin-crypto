@@ -64,9 +64,25 @@ fun main() <noret> {
 """
 
 
-def symbols(object_file, tool):
-    out = subprocess.run([tool, object_file], capture_output=True, text=True, check=True)
-    return out.stdout
+def symbol_dump(object_file):
+    """Symbols from the first available tool.
+
+    `nm` exists on Linux and macOS. A Windows runner with the MSVC/x64 toolset
+    has `llvm-nm` instead, and `dumpbin /symbols` as a last resort. A toolchain
+    with none of the three cannot answer the question, and that is reported as
+    skipped rather than as a pass.
+    """
+    if shutil.which("llvm-nm"):
+        return subprocess.run(["llvm-nm", object_file], capture_output=True,
+                              text=True, check=True).stdout
+    if shutil.which("nm"):
+        return subprocess.run(["nm", object_file], capture_output=True,
+                              text=True, check=True).stdout
+    dumpbin = shutil.which("dumpbin")
+    if dumpbin:
+        return subprocess.run([dumpbin, "/symbols", object_file], capture_output=True,
+                              text=True, check=True).stdout
+    return None
 
 
 def build(finc, source_dir, work, libs_flags):
@@ -75,7 +91,7 @@ def build(finc, source_dir, work, libs_flags):
     obj = work / "probe.o"
     subprocess.run([finc, "-c", str(probe), "-I", str(source_dir), *libs_flags,
                     "-o", str(obj)], check=True, capture_output=True, text=True)
-    return symbols(str(obj), shutil.which("nm") or "nm")
+    return symbol_dump(str(obj))
 
 
 def main():
@@ -84,9 +100,6 @@ def main():
     ap.add_argument("--fin-libs", default=os.environ.get("FIN_LIBS") or None)
     args = ap.parse_args()
     libs_flags = ["--fin-libs", args.fin_libs] if args.fin_libs else []
-
-    if shutil.which("nm") is None:
-        sys.exit("check_platform_branch: nm is required to inspect symbols")
 
     text = SRC.read_text(encoding="utf-8")
     if "#c_ifdef FIN_TARGET_WINDOWS" not in text:
@@ -107,23 +120,41 @@ def main():
         host = build(args.finc, native_dir, work, libs_flags)
         forced = build(args.finc, windows_dir, work, libs_flags)
 
+    if host is None or forced is None:
+        print("platform branch: skipped, no symbol tool (llvm-nm, nm or dumpbin) on this runner")
+        return
+
     def has(syms, name):
         return re.search(rf"\b{name}\b", syms) is not None
 
     failures = []
+    # The forced copy must always take the Windows path, on every runner.
     if not has(forced, "rand_s"):
         failures.append("forced Window branch does not reference rand_s")
     for libc_name in ("fopen", "fread", "fclose"):
         if has(forced, libc_name):
             failures.append(f"forced Windows branch still references {libc_name}")
-    if has(host, "rand_s"):
-        failures.append("host build references rand_s; the guard did not select the POSIX path")
-    if not has(host, "fopen"):
-        failures.append("host build does not reference fopen; the /dev/urandom path is missing")
+
+    # The unmodified build must take whichever path its own platform selects.
+    # A Windows runner's native build *is* the rand_s path, so asserting
+    # /dev/urandom there would be asserting the wrong platform.
+    if os.name == "nt":
+        if not has(host, "rand_s"):
+            failures.append("native Windows build does not reference rand_s")
+        for libc_name in ("fopen", "fread", "fclose"):
+            if has(host, libc_name):
+                failures.append(f"native Windows build references {libc_name}")
+        host_path = "rand_s"
+    else:
+        if has(host, "rand_s"):
+            failures.append("host build references rand_s; the guard did not select the POSIX path")
+        if not has(host, "fopen"):
+            failures.append("host build does not reference fopen; the /dev/urandom path is missing")
+        host_path = "/dev/urandom"
 
     if failures:
         sys.exit("check_platform_branch failed:\n  " + "\n  ".join(failures))
-    print("platform branch: Windows selects rand_s, host selects /dev/urandom, both lower")
+    print(f"platform branch: forced Windows selects rand_s, native host selects {host_path}")
 
 
 if __name__ == "__main__":
