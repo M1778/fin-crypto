@@ -1,69 +1,100 @@
 name: CI
 
+# Every lane compiles AND executes the tests. A lane that only type-checks has
+# not tested anything, so there is no check-only job here.
+#
+# The compiler comes from the published release, pinned in FINC_VERSION, and
+# installed by .github/scripts/install_finc.py, which verifies the index's
+# sha256 and refuses a compiler that cannot answer --version. Windows supports
+# this source through `#c_ifdef FIN_TARGET_WINDOWS`, and the windows-x86_64
+# lane is where that branch is actually executed.
+
 on:
   push:
     branches: [master, main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-15
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: windows-x86_64
+            runner: windows-2022
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake ninja-build bison flex python3 pipx clang gpg curl git
-          pipx install conan
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Install LLVM 22
-        run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm22.list > /dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-22-dev clang-22 libllvm22
-
-      - name: Restore finc toolchain cache
-        id: finc-restore
-        uses: actions/cache/restore@v4
+      - uses: actions/setup-python@v5
         with:
-          path: |
-            /tmp/Fin
-            ~/.conan2
-          key: finc-toolchain-v1
+          python-version: "3.12"
 
-      - name: Build finc (on cache miss)
-        if: steps.finc-restore.outputs.cache-hit != 'true'
+      - name: Install pinned finc
+        run: python3 -I .github/scripts/install_finc.py --dest .finc
+
+      # The macOS artifact links a Homebrew LLVM dylib, so the runtime must be
+      # present before the compiler will start.
+      - name: Install macOS LLVM runtime
+        if: runner.os == 'macOS'
+        run: brew install llvm@22
+
+      - name: Install Windows linker toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Show compiler identity, require contract 3
         run: |
-          export PATH="$HOME/.local/bin:/usr/lib/llvm-22/bin:$PATH"
-          git clone --depth 1 https://github.com/M1778/Fin.git /tmp/Fin
-          cd /tmp/Fin && ./build.sh --release --no-test
+          set -euo pipefail
+          got=$(.finc/bin/finc --version)
+          echo "$got"
+          case "$got" in
+            *"contract 3"*) ;;
+            *) echo "finc does not speak contract 3: $got"; exit 1 ;;
+          esac
 
-      - name: Save finc toolchain cache
-        if: steps.finc-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            /tmp/Fin
-            ~/.conan2
-          key: finc-toolchain-v1
-
-      - name: finc version
-        run: |
-          echo "/tmp/Fin/build" >> "$GITHUB_PATH"
-          /tmp/Fin/build/finc --version
-
+      # A frontend-only check first: it separates a parse/type failure from a
+      # codegen or link failure in the log.
       - name: Frontend check
-        run: |
-          finc src/crypto.fin
+        run: .finc/bin/finc src/crypto.fin
 
-      - name: Build and run tests
-        run: |
-          finc tests/test_crypto.fin -I src -o test_crypto && ./test_crypto
+      - name: Build and execute all tests (-O0 and -O2)
+        run: python3 -I tests/run_tests.py --finc .finc/bin/finc
 
-      - name: Build and run example
+      - name: Build and execute the example
         run: |
-          finc examples/basic.fin -I src -o example_basic && ./example_basic
+          set -euo pipefail
+          .finc/bin/finc examples/basic.fin -I src -o example_basic
+          ./example_basic
+
+      # finn is the real package manager; exercising it catches a manifest the
+      # tool cannot consume. It is best-effort because finn is installed from
+      # source and its build time is not this repository's cost to pay.
+      - name: Package manager check (finn)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          export FIN_COMPILER_PATH="$PWD/.finc/bin/finc"
+          if ! command -v finn >/dev/null 2>&1; then
+            echo "finn not installed on this runner; skipping package check"
+            exit 0
+          fi
+          finn healthcheck
+          finn test
