@@ -15,16 +15,19 @@ The earlier first execution caught a SHA-256 schedule bug (see CHANGELOG).
 passed fin-crypto's Linux x86-64/ARM64 and macOS x86-64/ARM64 builds/tests using
 `/dev/urandom`, at crypto revision `777990f2ef19ec7be6a69a628957ffb48da11974`.
 These are the per-project results, not the overall ecosystem job status.
-**Windows x86-64/ARM64 are blocked by the published compiler**, not merely
-awaiting CI: Fin revision `1f7afd97ab5ad520b78db3140d4f930aaeb74d1b` does not
-predefine `FIN_TARGET_WINDOWS` (nor the Darwin/Linux target macros). Consequently
-`#c_ifdef FIN_TARGET_WINDOWS` selects the non-Windows `/dev/urandom` path even in
-a native Windows build, and the random-source test fails there.
+**Windows x86-64/ARM64 were previously believed blocked, and are not.** An earlier
+compiler revision, Fin `1f7afd97ab5ad520b78db3140d4f930aaeb74d1b`, did not
+predefine `FIN_TARGET_WINDOWS` (nor the Darwin/Linux target macros), so
+`#c_ifdef FIN_TARGET_WINDOWS` selected the non-Windows `/dev/urandom` path and the
+random-source test failed there. Commit `cc7f1663` ("fix: prepare v1 production
+candidate") added the target predefines; the shipped `finc 1.0.0` reports
+`FIN_TARGET_WINDOWS`, `FIN_TARGET_DARWIN`, `FIN_TARGET_LINUX`,
+`FIN_TARGET_X86_64` and `FIN_TARGET_ARM64`.
 
-The Windows `rand_s` implementation exists in source but has not passed native
-execution. It requires upstream compiler target-macro support and a successful
-native CI rerun; renaming the guard is not a supported workaround. UCRT linkage
-is intended to need no additional crypto import library or manual linker flags.
+The Windows `rand_s` branch therefore is selectable, and this repository's
+`windows-x86_64` CI lane executes it. UCRT needs no additional crypto import
+library or manual linker flags. The guard spelling `#c_ifdef` was already
+correct; nothing in the source needed renaming.
 
 ## Install
 
